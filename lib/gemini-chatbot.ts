@@ -1,0 +1,178 @@
+/**
+ * Gemini AI Chatbot Service for Astrology
+ * 
+ * This module provides functions to interact with Google Gemini API
+ * for astrology-related conversations via Supabase Edge Functions
+ */
+
+import { supabase } from './supabase';
+
+const SUPABASE_URL = "https://ykgbfrpkumlnogjdgqgb.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlrZ2JmcnBrdW1sbm9namRncWdiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjM1MzM2MzgsImV4cCI6MjA3OTEwOTYzOH0.0RUq2i39uuwmeGcQ8ySwzz9NZOAUmmt7H51TE411F2M";
+
+/**
+ * Lists available Gemini models
+ * Note: This function still calls Gemini API directly as it's a read-only operation
+ * For production, you may want to create a separate Edge Function for this
+ */
+export const listAvailableModels = async (): Promise<{
+  success: boolean;
+  models?: Array<{ name: string; displayName: string; supportedGenerationMethods: string[] }>;
+  error?: string;
+}> => {
+  // Direct Gemini API calls are disabled — EXPO_PUBLIC_ keys are baked
+  // into the APK bundle at build time and exposed to anyone who decompiles it.
+  // Route through the Supabase Edge Function if model listing is needed.
+  return {
+    success: false,
+    error: 'Model listing is disabled. Use the Edge Function endpoint instead.',
+  };
+};
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp?: Date;
+}
+
+export interface ChatResponse {
+  success: boolean;
+  message?: string;
+  error?: string;
+}
+
+/**
+ * Sends a message to Gemini API via Supabase Edge Function and gets a response
+ */
+export const sendMessageToGemini = async (
+  userMessage: string,
+  conversationHistory: ChatMessage[] = []
+): Promise<ChatResponse> => {
+  try {
+    // Prepare conversation history for the Edge Function
+    // Convert Date objects to ISO strings for JSON serialization
+    const serializedHistory = conversationHistory.map((msg) => ({
+      role: msg.role,
+      content: msg.content,
+      timestamp: msg.timestamp?.toISOString(),
+    }));
+
+    // Call the Supabase Edge Function
+    // Try using supabase.functions.invoke() first, with fallback to direct fetch
+    let data: any = null;
+    let error: any = null;
+
+    try {
+      // First try using supabase.functions.invoke() (automatically includes auth token)
+      const result = await supabase.functions.invoke('gemini-chatbot', {
+        body: {
+          message: userMessage,
+          conversationHistory: serializedHistory,
+        },
+      });
+
+      data = result.data;
+      error = result.error;
+    } catch (invokeError) {
+      // If invoke fails, try direct fetch as fallback
+      console.warn('supabase.functions.invoke() failed, trying direct fetch:', invokeError);
+
+      try {
+        // Get the session token for authentication
+        const { data: { session } } = await supabase.auth.getSession();
+        const authToken = session?.access_token || SUPABASE_ANON_KEY;
+
+        const response = await fetch(
+          `${SUPABASE_URL}/functions/v1/gemini-chatbot`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'apikey': SUPABASE_ANON_KEY,
+              'Authorization': `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({
+              message: userMessage,
+              conversationHistory: serializedHistory,
+            }),
+          }
+        );
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          error = {
+            name: 'FunctionsHttpError',
+            message: errorData.error || `HTTP ${response.status}`,
+            context: { status: response.status },
+          };
+        } else {
+          data = await response.json();
+        }
+      } catch (fetchError) {
+        error = fetchError;
+      }
+    }
+
+    if (error) {
+      console.error('Edge function error:', error);
+      console.error('Error details:', JSON.stringify(error, null, 2));
+
+      // Try to extract the actual error message from the response
+      let errorMessage = 'Failed to call chatbot service';
+
+      // Check if error has context with status
+      if (error.context?.status === 401) {
+        errorMessage = 'Authentication failed. Please make sure the Edge Function is deployed and the apikey is configured correctly.';
+      } else if (error.context?.status === 404) {
+        errorMessage = 'Edge Function not found. Please deploy the "gemini-chatbot" function in your Supabase project.';
+      } else if (error.message) {
+        errorMessage = error.message;
+      } else if (error.name === 'FunctionsHttpError') {
+        // Try to get error from response body if available
+        const status = error.context?.status;
+        if (status === 401) {
+          errorMessage = 'Unauthorized. The Edge Function requires proper authentication. Make sure it is deployed and configured.';
+        } else if (status === 500) {
+          errorMessage = 'Server error. Check the Edge Function logs in Supabase dashboard for details.';
+        } else {
+          errorMessage = `The chatbot service returned an error (status: ${status || 'unknown'}). Please check the Edge Function logs.`;
+        }
+      }
+
+      return {
+        success: false,
+        error: errorMessage,
+      };
+    }
+
+    // The Edge Function returns { success: boolean, message?: string, error?: string }
+    if (data && data.success && data.message) {
+      return {
+        success: true,
+        message: data.message,
+      };
+    } else {
+      // If data exists but success is false, return the error from the function
+      const errorMsg = data?.error || 'No response from chatbot service';
+      console.error('Edge function returned error:', errorMsg);
+      return {
+        success: false,
+        error: errorMsg,
+      };
+    }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('Exception in Gemini chatbot:', errorMessage);
+    return {
+      success: false,
+      error: errorMessage,
+    };
+  }
+};
+
+/**
+ * Get a welcome message for the chatbot
+ */
+export const getWelcomeMessage = (): string => {
+  return "Hello! I'm your astrology guide for AstroDate. 🌟\n\nI can help you with:\n• Understanding astrological compatibility\n• Relationship insights based on zodiac signs\n• Dating advice from an astrological perspective\n• Your personal astrological profile\n• General astrology questions\n\nWhat would you like to know?";
+};
