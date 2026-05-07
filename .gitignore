@@ -58,3 +58,5 @@ package-lock.json
 test-db*.js
 tmp_*.ts
 tmp_*.js
+# Supabase local temp files (exposes project ref + DB metadata)
+supabase/.temp/

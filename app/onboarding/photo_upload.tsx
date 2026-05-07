@@ -3,16 +3,16 @@ import * as ImagePicker from 'expo-image-picker';
 import { router, useNavigation } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Animated,
-    Image,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  Animated,
+  Image,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../../lib/supabase';
@@ -149,7 +149,7 @@ export default function PhotoUploadScreen() {
 
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ["images"],
         allowsEditing: true,
         aspect: [3, 4],
         quality: 0.8,
@@ -230,7 +230,7 @@ export default function PhotoUploadScreen() {
         .map((p) => p.verificationError || 'Verification failed')
         .filter((msg) => msg)
         .join('\n\n');
-      
+
       Alert.alert(
         'Photo Verification Required',
         `Some photos are still being verified or failed verification:\n\n${errorMessages}\n\nPlease wait for verification to complete or replace these photos with:\n• Clear photos showing your face\n• Photos with good lighting\n• Photos containing only you (one person)\n• Recent photos that look like you`,
@@ -251,7 +251,7 @@ export default function PhotoUploadScreen() {
     try {
       // Get current user ID
       const { data: { user }, error: userError } = await supabase.auth.getUser();
-      
+
       if (userError || !user) {
         console.error('❌ Could not get current user:', userError);
         Alert.alert(
@@ -390,61 +390,61 @@ export default function PhotoUploadScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-        <Animated.View
-          style={[
-            styles.content,
-            {
-              opacity: fadeAnim,
-              transform: [{ scale: scaleAnim }],
-            },
-          ]}>
-          {/* Header */}
-          <View style={styles.header}>
-            <Text style={styles.title}>Add Your Photos</Text>
-            <Text style={styles.subtitle}>
-              Show your best self! Add at least {MIN_PHOTOS} photos to continue.
+      <Animated.View
+        style={[
+          styles.content,
+          {
+            opacity: fadeAnim,
+            transform: [{ scale: scaleAnim }],
+          },
+        ]}>
+        {/* Header */}
+        <View style={styles.header}>
+          <Text style={styles.title}>Add Your Photos</Text>
+          <Text style={styles.subtitle}>
+            Show your best self! Add at least {MIN_PHOTOS} photos to continue.
+          </Text>
+
+          {/* Constraint Message */}
+          <View style={styles.constraintContainer}>
+            <Ionicons name="information-circle" size={18} color="#4B0082" />
+            <Text style={styles.constraintText}>
+              All photos must be of the same person (yourself)
             </Text>
-            
-            {/* Constraint Message */}
-            <View style={styles.constraintContainer}>
-              <Ionicons name="information-circle" size={18} color="#4B0082" />
-              <Text style={styles.constraintText}>
-                All photos must be of the same person (yourself)
-              </Text>
-            </View>
-            
-            <View style={styles.progressIndicator}>
-              <Text style={styles.progressText}>
-                {photos.length} / {MAX_PHOTOS} photos
-              </Text>
-              <View style={styles.progressBarContainer}>
-                <View
-                  style={[
-                    styles.progressBar,
-                    {
-                      width: `${(photos.length / MAX_PHOTOS) * 100}%`,
-                      backgroundColor:
-                        photos.length >= MIN_PHOTOS ? '#10B981' : '#4B0082',
-                    },
-                  ]}
-                />
-              </View>
-            </View>
           </View>
 
-          {/* Photo Grid */}
-          <ScrollView
-            style={styles.scrollView}
-            contentContainerStyle={styles.scrollContent}
-            showsVerticalScrollIndicator={false}>
-            <View style={styles.photoGrid}>
-              {Array.from({ length: MAX_PHOTOS }).map((_, index) =>
-                renderPhotoSlot(index)
-              )}
+          <View style={styles.progressIndicator}>
+            <Text style={styles.progressText}>
+              {photos.length} / {MAX_PHOTOS} photos
+            </Text>
+            <View style={styles.progressBarContainer}>
+              <View
+                style={[
+                  styles.progressBar,
+                  {
+                    width: `${(photos.length / MAX_PHOTOS) * 100}%`,
+                    backgroundColor:
+                      photos.length >= MIN_PHOTOS ? '#10B981' : '#4B0082',
+                  },
+                ]}
+              />
             </View>
+          </View>
+        </View>
 
-            {/* Upload Options - Removed */}
-          
+        {/* Photo Grid */}
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}>
+          <View style={styles.photoGrid}>
+            {Array.from({ length: MAX_PHOTOS }).map((_, index) =>
+              renderPhotoSlot(index)
+            )}
+          </View>
+
+          {/* Upload Options - Removed */}
+
           {/* Verification Status Message */}
           {photos.length >= 2 && verificationStatus.error && (
             <View style={styles.verificationStatusContainer}>
@@ -475,10 +475,10 @@ export default function PhotoUploadScreen() {
                   {canContinue()
                     ? 'Continue'
                     : photos.length < MIN_PHOTOS
-                    ? `Add ${MIN_PHOTOS - photos.length} More`
-                    : !areAllPhotosVerified()
-                    ? 'Verifying Photos...'
-                    : 'Continue'}
+                      ? `Add ${MIN_PHOTOS - photos.length} More`
+                      : !areAllPhotosVerified()
+                        ? 'Verifying Photos...'
+                        : 'Continue'}
                 </Text>
                 {canContinue() && (
                   <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
@@ -486,9 +486,9 @@ export default function PhotoUploadScreen() {
               </>
             )}
           </TouchableOpacity>
-          </ScrollView>
-        </Animated.View>
-      </SafeAreaView>
+        </ScrollView>
+      </Animated.View>
+    </SafeAreaView>
   );
 }
 

@@ -9,7 +9,13 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.astrodate.app"
+      "bundleIdentifier": "com.astrodate.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "AstroDate needs access to your camera so you can take profile photos and capture pictures to share in chats.",
+        "NSPhotoLibraryUsageDescription": "AstroDate needs access to your photo library so you can choose pictures for your profile and share them in chats.",
+        "NSMicrophoneUsageDescription": "AstroDate needs access to your microphone so you can record and send voice messages in chats.",
+        "NSLocationWhenInUseUsageDescription": "AstroDate uses your location to auto-fill your city and to show matches near you. Your exact location is never shared with other users."
+      }
     },
     "android": {
       "package": "com.astrodate.app",
@@ -54,6 +60,26 @@
           "dark": {
             "backgroundColor": "#000000"
           }
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "AstroDate needs access to your photo library so you can choose pictures for your profile and share them in chats.",
+          "cameraPermission": "AstroDate needs access to your camera so you can take profile photos and capture pictures to share in chats.",
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "AstroDate uses your location to auto-fill your city and to show matches near you. Your exact location is never shared with other users."
+        }
+      ],
+      [
+        "expo-av",
+        {
+          "microphonePermission": "AstroDate needs access to your microphone so you can record and send voice messages in chats."
         }
       ],
       "expo-font",
