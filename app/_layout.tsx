@@ -1,5 +1,6 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack, usePathname, useRouter, useSegments } from 'expo-router';
+import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, AppStateStatus, Platform, View } from 'react-native';
@@ -9,6 +10,9 @@ import 'react-native-reanimated';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { updateOnlineStatus } from '@/lib/online-status';
 import { supabase } from '@/lib/supabase';
+
+// Keep splash visible until we finish the session check
+SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
@@ -80,6 +84,9 @@ export default function RootLayout() {
       } catch (error) {
         console.error('Error checking session:', error);
         setIsLoading(false);
+      } finally {
+        // Always hide splash screen once session check is done
+        await SplashScreen.hideAsync();
       }
     };
 
@@ -190,6 +197,20 @@ export default function RootLayout() {
           <Stack.Screen name="onboarding/onboarding_ques" options={{ headerShown: false }} />
           <Stack.Screen name="profile-details" options={{ headerShown: false, animation: 'fade', gestureEnabled: true }} />
           <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+          <Stack.Screen name="onboarding/signup" options={{ headerShown: false }} />
+          <Stack.Screen name="onboarding/otp-verify" options={{ headerShown: false }} />
+          <Stack.Screen name="onboarding/welcome" options={{ headerShown: false }} />
+          <Stack.Screen name="onboarding/basic-details" options={{ headerShown: false }} />
+          <Stack.Screen name="onboarding/birth-details" options={{ headerShown: false }} />
+          <Stack.Screen name="onboarding/photo_upload" options={{ headerShown: false }} />
+          <Stack.Screen name="onboarding/zodiac-preview" options={{ headerShown: false }} />
+          <Stack.Screen name="onboarding/congratulations" options={{ headerShown: false }} />
+          <Stack.Screen name="onboarding/phone-verification" options={{ headerShown: false }} />
+          <Stack.Screen name="chat/[id]" options={{ headerShown: false, animation: 'slide_from_right' }} />
+          <Stack.Screen name="chatbot" options={{ headerShown: false }} />
+          <Stack.Screen name="filters" options={{ headerShown: false }} />
+          <Stack.Screen name="settings" options={{ headerShown: false }} />
+          <Stack.Screen name="help" options={{ headerShown: false }} />
         </Stack>
         <StatusBar
           style="auto"
