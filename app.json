@@ -9,12 +9,13 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.astrodate.app",
+      "bundleIdentifier": "com.cielinfitech.astrodate",
       "infoPlist": {
         "NSCameraUsageDescription": "AstroDate needs access to your camera so you can take profile photos and capture pictures to share in chats.",
         "NSPhotoLibraryUsageDescription": "AstroDate needs access to your photo library so you can choose pictures for your profile and share them in chats.",
         "NSMicrophoneUsageDescription": "AstroDate needs access to your microphone so you can record and send voice messages in chats.",
-        "NSLocationWhenInUseUsageDescription": "AstroDate uses your location to auto-fill your city and to show matches near you. Your exact location is never shared with other users."
+        "NSLocationWhenInUseUsageDescription": "AstroDate uses your location to auto-fill your city and to show matches near you. Your exact location is never shared with other users.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -27,8 +28,10 @@
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
-        "android.permission.RECORD_AUDIO",
-        "android.permission.MODIFY_AUDIO_SETTINGS"
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.RECORD_AUDIO"
       ],
       "blockedPermissions": [
         "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
