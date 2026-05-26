@@ -158,7 +158,7 @@ export const getUserById = async (userId: string): Promise<{ success: boolean; d
       .from('user_profiles')
       .select('user_id, full_name, phone_number, email')
       .eq('user_id', userId)
-      .single();
+      .maybeSingle();
 
     if (profileError || !profile) {
       console.error('❌ Error fetching user:', profileError);
@@ -174,7 +174,7 @@ export const getUserById = async (userId: string): Promise<{ success: boolean; d
       .select('photo_url')
       .eq('user_id', userId)
       .eq('is_primary', true)
-      .single();
+      .maybeSingle();
 
     const user: User = {
       user_id: profile.user_id,

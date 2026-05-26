@@ -37,7 +37,7 @@ export const getMatch = async (
       .select('*')
       .eq('user1_id', currentUserId)
       .eq('user2_id', otherUserId)
-      .single();
+      .maybeSingle();
 
     // If not found, check where current user is user2 and other is user1
     if (error1 || !match1) {
@@ -46,7 +46,7 @@ export const getMatch = async (
         .select('*')
         .eq('user1_id', otherUserId)
         .eq('user2_id', currentUserId)
-        .single();
+        .maybeSingle();
 
       if (error2 || !match2) {
         // No match found

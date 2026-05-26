@@ -1,4 +1,5 @@
 // lib/typing-status.ts
+import { releaseRealtimeChannel, releaseRealtimeChannelsByTopicPrefix, trackRealtimeChannel } from './realtime-channels';
 import { supabase } from './supabase';
 
 interface TypingStatusData {
@@ -20,17 +21,20 @@ let channelInitializing = false;
  * so the next broadcastTypingStatus call re-subscribes on a fresh socket.
  */
 export const resetGlobalTypingChannel = async (): Promise<void> => {
-    try {
-        if (globalBroadcastChannel) {
-            await supabase.removeChannel(globalBroadcastChannel);
-            globalBroadcastChannel = null;
-            channelInitializing = false;
-        }
-    } catch (error) {
-        console.warn('⚠️ [Typing] Error resetting global channel:', error);
-        globalBroadcastChannel = null;
-        channelInitializing = false;
+  try {
+    if (globalBroadcastChannel) {
+      const ch = globalBroadcastChannel;
+      globalBroadcastChannel = null;  // null first to block new sends
+      channelInitializing = false;
+      // Small delay to let any in-flight httpSend resolve
+      await new Promise(r => setTimeout(r, 150));
+      releaseRealtimeChannel(supabase, ch);
     }
+  } catch (error) {
+    console.warn('⚠️ [Typing] Error resetting global channel:', error);
+    globalBroadcastChannel = null;
+    channelInitializing = false;
+  }
 };
 
 const isTransientNetworkError = (error: unknown): boolean => {
@@ -62,7 +66,7 @@ export const broadcastTypingStatus = async (
         // Initialize channel if needed (non-blocking)
         if (!globalBroadcastChannel && !channelInitializing) {
             channelInitializing = true;
-            globalBroadcastChannel = supabase.channel(TYPING_CHANNEL);
+            globalBroadcastChannel = trackRealtimeChannel(supabase.channel(TYPING_CHANNEL));
 
             globalBroadcastChannel.subscribe(() => {
                 channelInitializing = false;
@@ -140,8 +144,8 @@ export const subscribeToTypingStatus = (
         }
 
         // IMPORTANT: Use the same global channel that broadcasts use
-        const channel = supabase.channel(TYPING_CHANNEL);
-
+        releaseRealtimeChannelsByTopicPrefix(supabase, `${TYPING_CHANNEL}-recv-${channelId}`);
+        const channel = trackRealtimeChannel(supabase.channel(`${TYPING_CHANNEL}-recv-${channelId}-${Date.now()}`));
         // Track typing users in this channel
         const typingUsers = new Map<string, number>(); // userId -> timestamp
         let cleanupInterval: ReturnType<typeof setInterval>;
@@ -221,7 +225,8 @@ export const subscribeToMultipleTypingChannels = (
         });
 
         // IMPORTANT: Use the same global channel that broadcasts use
-        const channel = supabase.channel(TYPING_CHANNEL);
+        releaseRealtimeChannelsByTopicPrefix(supabase, `${TYPING_CHANNEL}-list-${currentUserId}`);
+        const channel = trackRealtimeChannel(supabase.channel(`${TYPING_CHANNEL}-list-${currentUserId}-${Date.now()}`));
 
         // Listen for typing broadcasts
         channel
@@ -301,10 +306,16 @@ export const cleanupTypingSubscriptions = (channels: any[]) => {
                 if (typeof channel.cleanup === 'function') {
                     channel.cleanup();
                 }
-                channel.unsubscribe();
+                releaseRealtimeChannel(supabase, channel);
             }
         });
     } catch (error) {
         console.error('❌ Error cleaning up typing subscriptions:', error);
     }
+};
+
+export const cleanupAllTypingChannels = () => {
+    releaseRealtimeChannelsByTopicPrefix(supabase, TYPING_CHANNEL);
+    globalBroadcastChannel = null;
+    channelInitializing = false;
 };

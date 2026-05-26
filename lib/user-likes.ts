@@ -1,4 +1,7 @@
 import { supabase } from './supabase';
+import type { Json } from './database.types';
+import { drainPendingPushNotifications } from './notifications';
+import { generateAndSaveIcebreaker } from './icebreaker';
 
 export type LikeActionType = 'like' | 'dislike' | 'super_like';
 
@@ -197,6 +200,17 @@ export async function checkMutualLike(
       const matchResult = await saveMatch(userId, likedUserId);
 
       if (matchResult.success) {
+        // Kick off icebreaker generation in the background.
+        // We deliberately do NOT await this — the match modal should open
+        // immediately. By the time the user taps into chat, the icebreaker
+        // will already be stored in user_matches.icebreaker_text.
+        if (matchResult.data?.id) {
+          generateAndSaveIcebreaker(matchResult.data.id).catch((err) => {
+            // Swallow — failure here never blocks the match flow
+            console.warn('[checkMutualLike] Icebreaker generation failed:', err);
+          });
+        }
+
         return {
           isMatch: true,
           channelId: matchResult.channelId,

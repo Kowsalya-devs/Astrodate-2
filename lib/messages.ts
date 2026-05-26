@@ -1,4 +1,5 @@
 import { getMatch } from './matches';
+import { drainPendingPushNotifications } from './notifications';
 import { supabase } from './supabase';
 export interface Message {
   id: string;
@@ -83,6 +84,7 @@ export const sendMessage = async (
       created_at: data?.created_at,
       message_text: data?.message_text,
     });
+    drainPendingPushNotifications().catch(() => { });
 
     return {
       success: true,
@@ -167,9 +169,9 @@ export const getMessages = async (
 };
 
 /**
- * Gets the last message for a conversation with a specific user
- * @param otherUserId - User ID of the other participant
- * @returns Last message or null
+ * @deprecated
+ * Do not use. This query is not channel-scoped.
+ * Use getLastMessagesBatch instead.
  */
 export const getLastMessage = async (
   otherUserId: string
@@ -535,7 +537,7 @@ export const getLastMessagesBatch = async (
     // instead of scanning 2000 rows client-side.
     const messageMap = new Map<string, { message: string; timestamp: Date; isRead: boolean; isSentByMe: boolean }>();
 
-    const results = await Promise.all(
+    const results = await Promise.allSettled(
       otherUserIds.map((otherUserId) =>
         supabase
           .from('messages')
@@ -545,20 +547,21 @@ export const getLastMessagesBatch = async (
           )
           .order('created_at', { ascending: false })
           .limit(1)
-          .then((res) => ({ otherUserId, res }))
       )
     );
 
-    for (const { otherUserId, res } of results) {
-      if (res.error || !res.data || res.data.length === 0) continue;
-      const msg = res.data[0];
-      messageMap.set(otherUserId, {
-        message: msg.message_text,
-        timestamp: new Date(msg.created_at),
-        isRead: msg.is_read,
-        isSentByMe: msg.sender_id === currentUserId,
-      });
-    }
+    results.forEach((result, index) => {
+      const otherUserId = otherUserIds[index];
+      if (result.status === 'fulfilled' && !result.value.error && result.value.data && result.value.data.length > 0) {
+        const msg = result.value.data[0];
+        messageMap.set(otherUserId, {
+          message: msg.message_text,
+          timestamp: new Date(msg.created_at),
+          isRead: msg.is_read,
+          isSentByMe: msg.sender_id === currentUserId,
+        });
+      }
+    });
 
     return {
       success: true,
