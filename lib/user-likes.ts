@@ -40,6 +40,14 @@ export async function saveUserLike(
       return { success: false, error: 'Cannot like yourself' };
     }
 
+    if (actionType === 'super_like') {
+      const { data: allowed } = await supabase
+        .rpc('check_super_like_quota', { p_user_id: userId });
+      if (!allowed) {
+        return { success: false, error: 'QUOTA_EXCEEDED' };
+      }
+    }
+
     // Use upsert to handle both insert and update cases
     // If a record exists, it will be updated; otherwise, a new one will be created
     const { data, error } = await supabase

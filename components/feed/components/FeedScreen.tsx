@@ -417,6 +417,7 @@ export default function DiscoverScreen() {
   const [currentUserInterest, setCurrentUserInterest] = useState<string[] | undefined>(undefined);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [showReportReasonModal, setShowReportReasonModal] = useState(false);
+  const [showUpgradeSheet, setShowUpgradeSheet] = useState(false);
   const [reportingProfile, setReportingProfile] = useState<Profile | null>(null);
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
   const [reportedUserIds, setReportedUserIds] = useState<Set<string>>(new Set());
@@ -1039,16 +1040,10 @@ export default function DiscoverScreen() {
           await checkAndShowMatch(likedUserId, currentProfile);
         } else if (result.error === 'THE_USER_NO_LONGER_EXISTS') {
           console.warn(`⚠️ User ${likedUserId} no longer exists, skipping...`);
-        } else if (result.error === 'SUPER_LIKE_QUOTA_EXCEEDED') {
-          // Show upgrade prompt — do not advance the card
-          Alert.alert(
-            '⭐ Shooting Stars Used Up',
-            'You\'ve used all your Shooting Stars today. Upgrade to Stellar or Cosmic for more.',
-            [
-              { text: 'Not Now', style: 'cancel' },
-              { text: 'View Plans', onPress: () => router.push('/(tabs)/profile') },
-            ]
-          );
+        } else if (result.error === 'QUOTA_EXCEEDED' || result.error === 'SUPER_LIKE_QUOTA_EXCEEDED') {
+          // Show upgrade sheet instead of generic error
+          resetCardPosition();
+          setShowUpgradeSheet(true);
           return; // do not call updateProfileIndex — keep card visible
         } else {
           console.error('Error saving super like:', result.error);
@@ -2087,6 +2082,38 @@ export default function DiscoverScreen() {
             )}
           </View>
         </LinearGradient>
+      </Modal>
+
+      {/* Upgrade Sheet Modal */}
+      <Modal
+        visible={showUpgradeSheet}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowUpgradeSheet(false)}
+      >
+        <View style={styles.upgradeSheetOverlay}>
+          <View style={styles.upgradeSheetContainer}>
+            <Text style={styles.upgradeSheetTitle}>⭐ Shooting Stars Used Up</Text>
+            <Text style={styles.upgradeSheetMessage}>
+              You've used all your Shooting Stars. Upgrade to Stellar or Cosmic for more.
+            </Text>
+            <TouchableOpacity 
+              style={styles.upgradeButton}
+              onPress={() => {
+                setShowUpgradeSheet(false);
+                router.push('/(tabs)/profile');
+              }}
+            >
+              <Text style={styles.upgradeButtonText}>View Plans</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.cancelButton}
+              onPress={() => setShowUpgradeSheet(false)}
+            >
+              <Text style={styles.cancelButtonText}>Not Now</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </Modal>
 
       {/* Report Reason Modal */}
@@ -3131,6 +3158,61 @@ const styles = StyleSheet.create({
     right: 20,
     top: '50%',
     zIndex: 1000,
+  },
+  toastText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  upgradeSheetOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  upgradeSheetContainer: {
+    backgroundColor: '#1a0d2e',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    paddingBottom: Platform.OS === 'ios' ? 40 : 24,
+    alignItems: 'center',
+  },
+  upgradeSheetTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 12,
+  },
+  upgradeSheetMessage: {
+    fontSize: 16,
+    color: 'rgba(255,255,255,0.8)',
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  upgradeButton: {
+    backgroundColor: '#A855F7',
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 30,
+    width: '100%',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  upgradeButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  cancelButton: {
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    width: '100%',
+    alignItems: 'center',
+  },
+  cancelButtonText: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
   missedPopupWrapper: {
     position: 'absolute',

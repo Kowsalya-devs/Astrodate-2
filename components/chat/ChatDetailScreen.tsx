@@ -1,23 +1,28 @@
-import { getIcebreakerForMatch } from '@/lib/icebreaker';
-import { deleteMatch, getMatch } from '@/lib/matches';
-import { deleteMessages, getMessages, markMessagesAsReadDebounced, sendMessage } from '@/lib/messages';
-import { getOnlineStatus } from '@/lib/online-status';
-import { createReport, isUserReportedInChannel } from '@/lib/reports';
+import { deleteMatch } from '@/lib/matches';
+import { deleteMessages, sendMessage } from '@/lib/messages';
 import { releaseRealtimeChannel, trackRealtimeChannel } from '@/lib/realtime-channels';
-import { signalMessageReplied, signalMessageSent } from '@/lib/signals';
+import { createReport, isUserReportedInChannel } from '@/lib/reports';
+import { signalMessageSent } from '@/lib/signals';
 import { supabase } from '@/lib/supabase';
-import { broadcastTypingStatus, cleanupTypingSubscriptions, subscribeToTypingStatus } from '@/lib/typing-status';
+import { broadcastTypingStatus } from '@/lib/typing-status';
 import { deleteUserLikes } from '@/lib/user-likes';
-import { getUserById } from '@/lib/users';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useNavigation } from '@react-navigation/native';
 import { Audio } from 'expo-av';
 // Use legacy FS to avoid deprecation crash on some Android builds
+import { ChatHeader } from '@/components/chat/ChatHeader';
+import { MessageList, MessageListRef } from '@/components/chat/MessageList';
+import { ErrorBoundary } from '@/components/error-boundary';
+import { useChatMessages } from '@/hooks/useChatMessages';
+import { useChatRouteParams } from '@/hooks/useChatRouteParams';
+import { useChatSession } from '@/hooks/useChatSession';
+import { useTypingStatus } from '@/hooks/useTypingStatus';
 import { useAuthAlert } from '@/lib/auth-alert-context';
+import { safeReleaseChatChannel } from '@/lib/chatRealtimeManager';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
-import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   AppState,
@@ -25,7 +30,6 @@ import {
   KeyboardAvoidingView,
   Modal,
   Platform,
-  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -34,10 +38,6 @@ import {
   View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ErrorBoundary } from '@/components/error-boundary';
-import { TypingIndicator } from '@/components/chat/TypingIndicator';
-import { useChatRouteParams } from '@/hooks/useChatRouteParams';
-import { cleanupChatChannels, removeChatChannelsByTopicPrefix } from '@/lib/chatRealtimeManager';
 
 type Message = {
   id: string;
@@ -47,130 +47,68 @@ type Message = {
   isRead: boolean;
 };
 
-type MessageRowProps = {
-  message: Message;
-  currentUserId: string;
-  avatar: any;
-};
+// MessageRow replaced by <MessageBubble> from @/components/chat/MessageBubble
+// formatMessageTime replaced by <MessageTimestamp> from @/components/chat/MessageTimestamp
+// The block below is a tombstone — remove on next cleanup pass
 
-const formatMessageTime = (date: Date) => {
-  try {
-    if (!date || isNaN(date.getTime())) return '';
-    const hours = date.getHours();
-    const minutes = date.getMinutes();
-    const ampm = hours >= 12 ? 'PM' : 'AM';
-    const displayHours = hours % 12 || 12;
-    return `${displayHours}:${minutes.toString().padStart(2, '0')} ${ampm}`;
-  } catch {
-    return '';
-  }
-};
-
-const MessageRow = memo(function MessageRow({ message, currentUserId, avatar }: MessageRowProps) {
-  const isMyMessage = message.senderId === currentUserId;
-  const messageTime = useMemo(() => formatMessageTime(message.timestamp), [message.timestamp]);
-
-  return (
-    <View
-      style={[
-        styles.messageContainer,
-        isMyMessage ? styles.myMessageContainer : styles.theirMessageContainer,
-      ]}>
-      {!isMyMessage && (
-        <Image source={avatar} style={styles.messageAvatar} />
-      )}
-      <View
-        style={[
-          styles.messageBubble,
-          isMyMessage ? styles.myMessageBubble : styles.theirMessageBubble,
-        ]}>
-        <Text
-          style={[
-            styles.messageText,
-            isMyMessage ? styles.myMessageText : styles.theirMessageText,
-          ]}>
-          {message.text}
-        </Text>
-        <View style={styles.messageFooter}>
-          <Text style={styles.messageTime}>{messageTime}</Text>
-          {isMyMessage && (
-            <MaterialIcons
-              name={message.isRead ? 'done-all' : 'done'}
-              size={14}
-              color={message.isRead ? '#A855F7' : 'rgba(255, 255, 255, 0.5)'}
-              style={styles.readIndicator}
-            />
-          )}
-        </View>
-      </View>
-    </View>
-  );
-}, (prev, next) => (
-  prev.currentUserId === next.currentUserId &&
-  prev.avatar === next.avatar &&
-  prev.message.id === next.message.id &&
-  prev.message.text === next.message.text &&
-  prev.message.senderId === next.message.senderId &&
-  prev.message.isRead === next.message.isRead &&
-  prev.message.timestamp.getTime() === next.message.timestamp.getTime()
-));
-
-// Helper to get avatar source
 const getAvatarSource = (avatarUrl: string | null | undefined) => {
-  if (avatarUrl) {
-    return { uri: avatarUrl };
-  }
-  return require('@/assets/images/avatar-placeholder.png'); // Fallback avatar
+  if (avatarUrl) return { uri: avatarUrl };
+  return require('@/assets/images/avatar-placeholder.png');
 };
-
-// Animated typing indicator component for header
-function ChatTypingIndicator() {
-  const [dotCount, setDotCount] = useState(1);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setDotCount((prev) => (prev === 3 ? 1 : prev + 1));
-    }, 500); // Change every 500ms
-
-    return () => clearInterval(interval);
-  }, []);
-
-  const dots = '•'.repeat(dotCount);
-  return (
-    <View style={styles.typingIndicatorContainer}>
-      <Text style={styles.chatTypingIndicatorDots}>typing {dots}</Text>
-    </View>
-  );
-}
 
 export default function ChatDetailScreen() {
   const { chatId } = useChatRouteParams();
   const router = useRouter();
   const navigation = useNavigation();
   const [messageText, setMessageText] = useState('');
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [user, setUser] = useState<{ name: string; avatar: any; isOnline: boolean } | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string>('');
-  const [loading, setLoading] = useState(true);
-  const scrollViewRef = useRef<React.ElementRef<typeof ScrollView>>(null);
 
-  const [sending, setSending] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'connecting'>('connecting');
   const [inputBarHeight, setInputBarHeight] = useState(64);
   const [showAttachmentModal, setShowAttachmentModal] = useState(false);
-  const [isMatched, setIsMatched] = useState<boolean | null>(null); // null = checking, true = matched, false = not matched
-  const [channelId, setChannelId] = useState<string>('');
-  const [icebreaker, setIcebreaker] = useState<string | null>(null);
   const [icebreakerDismissed, setIcebreakerDismissed] = useState(false);
-  const [isOtherUserTyping, setIsOtherUserTyping] = useState(false);
-  const typingChannels = useRef<any[]>([]);
-  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastTypingBroadcastRef = useRef(0);
-  const scrollTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
-  const recordingRef = useRef<Audio.Recording | null>(null);
+
   const isMountedRef = useRef(true);
   const hasSignaledMessageSent = useRef(false);
   const hasSignaledMessageReplied = useRef(false);
+  const messageListRef = useRef<MessageListRef>(null);
+  const recordingRef = useRef<Audio.Recording | null>(null);
+  // Track whether the user is scrolled near the bottom of the message list
+  const isAtBottomRef = useRef(true);
+
+  // ── useChatSession owns: user, isMatched, channelId, icebreaker, loading ──
+  const {
+    user,
+    isMatched,
+    channelId,
+    icebreaker,
+    loading,
+    setUser,
+  } = useChatSession({ chatId, isMountedRef });
+
+  // ── useTypingStatus owns: isOtherUserTyping, handleTyping ──
+  const { isOtherUserTyping, handleTyping } = useTypingStatus({ currentUserId, chatId, channelId });
+
+  // ── useChatMessages owns: messages, sending, connectionStatus, sendText, syncMessages, realtime subscriptions ──
+  const { messages, sending, connectionStatus, sendText, syncMessages, addConfirmedMessage, markMessageFailed, removeMessage } = useChatMessages({
+    chatId,
+    channelId,
+    currentUserId,
+    isMatched,
+    isMountedRef,
+  });
+
+  // Scroll to bottom only when: user is near the bottom OR the current user sent the last message
+  useEffect(() => {
+    if (messages.length === 0) return;
+    const lastMessage = messages[messages.length - 1];
+    const userSentLast = lastMessage?.senderId === currentUserId;
+    if (isAtBottomRef.current || userSentLast) {
+      const timeout = setTimeout(() => {
+        messageListRef.current?.scrollToBottom();
+      }, 50);
+      return () => clearTimeout(timeout);
+    }
+  }, [messages.length, currentUserId]);
 
   // Menu and modal states
   const [showMenuModal, setShowMenuModal] = useState(false);
@@ -211,9 +149,7 @@ export default function ChatDetailScreen() {
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
+      // typingTimeoutRef cleanup is owned by useTypingStatus hook
     };
   }, []);
 
@@ -234,129 +170,17 @@ export default function ChatDetailScreen() {
     getCurrentUser();
   }, []);
 
-  // Verify match and fetch user data and online status from backend
-  useEffect(() => {
-    let isMounted = true;
-    const fetchUser = async () => {
-      if (!chatId) {
-        if (isMounted) setLoading(false);
-        return;
-      }
 
-      if (isMounted) {
-        setLoading(true);
-        setIsMatched(null); // Reset match status
-      }
-      try {
-        // First, verify that users are matched
-        const matchResult = await getMatch(chatId);
-        if (!isMounted) return;
 
-        if (!matchResult.success || !matchResult.data) {
-          console.error('❌ Users are not matched');
-          setIsMatched(false);
-          setUser({
-            name: 'Unknown User',
-            avatar: require('@/assets/images/avatar-placeholder.png'),
-            isOnline: false,
-          });
-          setLoading(false);
-          return;
-        }
 
-        setIsMatched(true);
-        // Set channel_id from match
-        if (matchResult.data.channel_id) {
-          setChannelId(matchResult.data.channel_id);
-        }
-
-        // Fetch pre-generated icebreaker (no Gemini call — reads from DB only)
-        if (matchResult.data.id) {
-          getIcebreakerForMatch(matchResult.data.id)
-            .then((text) => {
-              if (text && isMounted) setIcebreaker(text);
-            })
-            .catch(() => { });
-        }
-
-        // If matched, fetch user data
-        const [userResult, onlineResult] = await Promise.all([
-          getUserById(chatId),
-          getOnlineStatus(chatId),
-        ]);
-
-        if (!isMounted) return;
-        if (userResult.success && userResult.data) {
-          setUser({
-            name: userResult.data.full_name,
-            avatar: getAvatarSource(userResult.data.avatar),
-            isOnline: onlineResult.isOnline || false,
-          });
-        } else {
-          console.error('Failed to fetch user:', userResult.error);
-          setUser({
-            name: 'Unknown User',
-            avatar: require('@/assets/images/avatar-placeholder.png'),
-            isOnline: false,
-          });
-        }
-      } catch (error) {
-        console.error('Error fetching user:', error);
-        if (isMounted) {
-          setIsMatched(false);
-          setUser({
-            name: 'Unknown User',
-            avatar: require('@/assets/images/avatar-placeholder.png'),
-            isOnline: false,
-          });
-        }
-      } finally {
-        if (isMounted) setLoading(false);
-      }
-    };
-
-    fetchUser();
-    return () => {
-      isMounted = false;
-    };
-  }, [chatId]);
-
-  const syncMessages = useCallback(async () => {
-    if (!currentUserId || !chatId || isMatched !== true || !channelId) return;
-
-    try {
-      const result = await getMessages(chatId, channelId);
-      if (!isMountedRef.current) return;
-
-      if (result.success && result.data) {
-        const uiMessages: Message[] = result.data.map((msg) => {
-          const ts = msg.created_at ? new Date(msg.created_at) : new Date();
-          return {
-            id: msg.id,
-            text: msg.message_text,
-            senderId: msg.sender_id,
-            timestamp: isNaN(ts.getTime()) ? new Date() : ts,
-            isRead: msg.is_read,
-          };
-        });
-
-        setMessages(uiMessages);
-        markMessagesAsReadDebounced(chatId, channelId);
-      } else {
-        console.error('❌ Failed to sync messages:', result.error);
-      }
-    } catch (error) {
-      console.error('❌ Error syncing messages:', error);
-    }
-  }, [chatId, currentUserId, isMatched, channelId]);
 
   // Subscribe to online status changes
   useEffect(() => {
     if (!chatId) return;
 
-    removeChatChannelsByTopicPrefix(supabase, `online_status:${chatId}`);
-
-    const onlineStatusChannelName = `online_status:${chatId}:${Date.now()}`;
+    const onlineStatusChannelName = `online_status:${chatId}`;
+    safeReleaseChatChannel(supabase, onlineStatusChannelName);
+    console.log('[Realtime] subscribe', onlineStatusChannelName);
 
     const channel = supabase
       .channel(onlineStatusChannelName)
@@ -387,16 +211,10 @@ export default function ChatDetailScreen() {
     trackRealtimeChannel(channel);
 
     return () => {
+      console.log('[Realtime] unsubscribe', onlineStatusChannelName);
       releaseRealtimeChannel(supabase, channel);
     };
   }, [chatId]);
-
-  // Fetch existing messages from database (only if matched) - OPTIMIZED
-  useEffect(() => {
-    if (!currentUserId || !chatId || isMatched !== true || !channelId) return;
-    syncMessages();
-    // REMOVED: Polling is inefficient - real-time subscriptions handle updates
-  }, [chatId, currentUserId, isMatched, channelId, syncMessages]);
 
   // Force a sync when app comes back to foreground.
   // (The 4-second polling loop that previously lived here was removed — it
@@ -413,189 +231,10 @@ export default function ChatDetailScreen() {
     return () => subscription.remove();
   }, [syncMessages]);
 
-  // Subscribe to real-time message updates - OPTIMIZED with channel_id filter
-  useEffect(() => {
-    if (!currentUserId || !chatId || !channelId) return;
 
-    let isActive = true;
 
-    removeChatChannelsByTopicPrefix(supabase, `messages:${channelId}`);
-
-    const channels: any[] = [];
-    const messageChannelName = `messages:${channelId}:${currentUserId}:${Date.now()}`;
-    setConnectionStatus('connecting');
-
-    // OPTIMIZED: Subscribe to messages by channel_id (much faster than filtering by sender_id/receiver_id)
-    const messageChannel = supabase
-      .channel(messageChannelName)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'messages',
-          filter: `channel_id=eq.${channelId}`, // OPTIMIZED: Use channel_id filter (uses index)
-        },
-        (payload) => {
-          const newMessage = payload.new as any;
-          if (!isMountedRef.current) return;
-
-          // Only process if it's for this conversation
-          if (newMessage.channel_id === channelId &&
-            (newMessage.sender_id === currentUserId || newMessage.receiver_id === currentUserId)) {
-            const insertTs = newMessage.created_at ? new Date(newMessage.created_at) : new Date();
-            const uiMessage: Message = {
-              id: newMessage.id,
-              text: newMessage.message_text,
-              senderId: newMessage.sender_id,
-              timestamp: isNaN(insertTs.getTime()) ? new Date() : insertTs,
-              isRead: newMessage.is_read,
-            };
-            setMessages((prev) => {
-              if (!hasSignaledMessageReplied.current && newMessage.sender_id !== currentUserId && prev.length > 0) {
-                hasSignaledMessageReplied.current = true;
-                signalMessageReplied(newMessage.sender_id);
-              }
-
-              // Check if this exact message already exists (by ID)
-              const messageExists = prev.some((m) => m.id === uiMessage.id);
-              if (messageExists) {
-                return prev;
-              }
-
-              return [...prev, uiMessage];
-            });
-
-            // Scroll to bottom
-            const scrollTimeout = setTimeout(() => {
-              scrollViewRef.current?.scrollToEnd({ animated: true });
-            }, 50);
-            scrollTimeoutsRef.current.push(scrollTimeout);
-
-            // OPTIMIZED: Use debounced mark as read for received messages
-            if (newMessage.receiver_id === currentUserId) {
-              markMessagesAsReadDebounced(chatId, channelId);
-            }
-          }
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'messages',
-          filter: `channel_id=eq.${channelId}`, // OPTIMIZED: Use channel_id filter
-        },
-        (payload) => {
-          const updatedMessage = payload.new as any;
-          if (!isMountedRef.current) return;
-          if (updatedMessage.channel_id === channelId) {
-            setMessages((prev) => {
-              let didChange = false;
-              const nextMessages = prev.map((msg) => {
-                if (msg.id !== updatedMessage.id) return msg;
-                if (msg.isRead === updatedMessage.is_read) return msg;
-                didChange = true;
-                return {
-                  ...msg,
-                  isRead: updatedMessage.is_read,
-                };
-              });
-              return didChange ? nextMessages : prev;
-            });
-          }
-        }
-      )
-      .subscribe((status) => {
-        if (!isMountedRef.current || !isActive) return;
-        if (status === 'SUBSCRIBED') {
-          setConnectionStatus('connected');
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          setConnectionStatus('disconnected');
-          void syncMessages();
-        }
-      });
-    trackRealtimeChannel(messageChannel);
-    channels.push(messageChannel);
-
-    return () => {
-      isActive = false;
-      cleanupChatChannels(supabase, channels);
-      scrollTimeoutsRef.current.forEach(clearTimeout);
-      scrollTimeoutsRef.current = [];
-    };
-  }, [chatId, currentUserId, channelId, syncMessages]);
-
-  // Set up typing indicator channel using the new typing status system
-  useEffect(() => {
-    if (!currentUserId || !chatId || !channelId) return;
-
-    const typingStatusChannel = subscribeToTypingStatus(
-      channelId,
-      (isOtherUserTyping) => {
-        if (!isMountedRef.current) return;
-        setIsOtherUserTyping((prev) => prev === isOtherUserTyping ? prev : isOtherUserTyping);
-      },
-      currentUserId
-    );
-
-    if (typingStatusChannel) {
-      typingChannels.current = [typingStatusChannel];
-    }
-
-    return () => {
-      cleanupTypingSubscriptions(typingChannels.current);
-      typingChannels.current = [];
-
-      // Cleanup: stop typing before leaving (non-blocking)
-      if (currentUserId && channelId) {
-        broadcastTypingStatus(currentUserId, channelId, false).catch(() => { });
-      }
-
-      // Release microphone lock if user navigates away mid-recording.
-      // Without this, Android holds the mic open permanently until app restart,
-      // blocking all other apps from using the microphone.
-      if (recordingRef.current) {
-        recordingRef.current.stopAndUnloadAsync().catch(() => { });
-      }
-    };
-  }, [currentUserId, chatId, channelId]);
-
-  // Handle typing indicator - broadcast typing status to other user
-  const handleTyping = useCallback(() => {
-    if (!currentUserId || !channelId) {
-      return;
-    }
-
-    // Broadcast typing status (non-blocking - don't await)
-    const now = Date.now();
-    if (now - lastTypingBroadcastRef.current > 1200) {
-      lastTypingBroadcastRef.current = now;
-      broadcastTypingStatus(currentUserId, channelId, true).catch((error) => {
-      console.error('❌ Error broadcasting typing status:', error);
-      });
-    }
-
-    // Clear existing timeout
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
-    }
-
-    // Set timeout to stop typing indicator after 3 seconds of inactivity
-    typingTimeoutRef.current = setTimeout(() => {
-      lastTypingBroadcastRef.current = 0;
-      broadcastTypingStatus(currentUserId, channelId, false).catch(() => { });
-    }, 3000);
-  }, [currentUserId, channelId]);
-
-  // Scroll to bottom when messages change
-  useEffect(() => {
-    const timeout = setTimeout(() => {
-      scrollViewRef.current?.scrollToEnd({ animated: true });
-    }, 100);
-    return () => clearTimeout(timeout);
-  }, [messages.length]);
+  // Scroll-to-bottom and typing channel lifecycle are now owned by
+  // <MessageList> and useTypingStatus hook respectively.
 
   // Function to delete match and messages when unmatching (backend deletion)
   const handleUnmatchAndDelete = useCallback(async () => {
@@ -664,10 +303,10 @@ export default function ChatDetailScreen() {
     } catch (error) {
       console.error('❌ Error during report:', error);
     }
-  }, [chatId, channelId, router]);
+  }, [chatId, router]);
 
   // Request media library permissions
-  const requestMediaPermissions = async () => {
+  const requestMediaPermissions = useCallback(async () => {
     if (Platform.OS !== 'web') {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
@@ -680,10 +319,10 @@ export default function ChatDetailScreen() {
       }
     }
     return true;
-  };
+  }, [showAlert]);
 
   // Request camera permissions
-  const requestCameraPermissions = async () => {
+  const requestCameraPermissions = useCallback(async () => {
     if (Platform.OS !== 'web') {
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
       if (status !== 'granted') {
@@ -696,10 +335,10 @@ export default function ChatDetailScreen() {
       }
     }
     return true;
-  };
+  }, [showAlert]);
 
   // Upload media (photo/video) to storage and send as a message
-  const uploadMediaAndSend = async (
+  const uploadMediaAndSend = useCallback(async (
     asset: ImagePicker.ImagePickerAsset,
     type: 'photo' | 'video'
   ) => {
@@ -707,8 +346,19 @@ export default function ChatDetailScreen() {
       return;
     }
 
+    const prefix = type === 'photo' ? '📷 Photo' : '🎬 Video';
+    const tempId = `temp-media-${Date.now()}`;
+    // Add optimistic placeholder immediately so the user sees feedback during upload
+    addConfirmedMessage({
+      id: tempId,
+      text: `${prefix}: uploading…`,
+      senderId: currentUserId,
+      timestamp: new Date(),
+      isRead: false,
+      isOptimistic: true,
+    });
+
     try {
-      setSending(true);
 
       const userResult = await supabase.auth.getUser();
       const user = userResult?.data?.user;
@@ -758,7 +408,6 @@ export default function ChatDetailScreen() {
         .getPublicUrl(filePath);
       const publicUrl = publicUrlResult?.data?.publicUrl;
 
-      const prefix = type === 'photo' ? '📷 Photo' : '🎬 Video';
       const messageText = `${prefix}: ${publicUrl}`;
 
       const result = await sendMessage(chatId, messageText, channelId);
@@ -766,19 +415,33 @@ export default function ChatDetailScreen() {
         throw new Error(result.error || 'Failed to send media message');
       }
 
+      // Replace optimistic placeholder with the confirmed server message
+      if (result.data) {
+        addConfirmedMessage({
+          id: result.data.id,
+          text: result.data.message_text,
+          senderId: result.data.sender_id,
+          timestamp: result.data.created_at ? new Date(result.data.created_at) : new Date(),
+          isRead: result.data.is_read,
+        });
+        // Remove the optimistic placeholder now that the real message is in state
+        // (reducer dedup will block a duplicate if realtime also delivers it)
+        removeMessage(tempId);
+      }
+
     } catch (error) {
+      // Mark the placeholder as failed so the user sees it rather than it disappearing
+      markMessageFailed(tempId);
       console.error('❌ Error sending media:', error);
       showAlert(
         'Error',
         `Failed to send ${type}: ${error instanceof Error ? error.message : String(error)}`
       );
-    } finally {
-      setSending(false);
     }
-  };
+  }, [currentUserId, chatId, channelId, sending, isMatched, addConfirmedMessage, markMessageFailed, removeMessage, showAlert]);
 
   // Handle photo picker
-  const handlePickPhoto = async () => {
+  const handlePickPhoto = useCallback(async () => {
     setShowAttachmentModal(false);
     const hasPermission = await requestMediaPermissions();
     if (!hasPermission) return;
@@ -798,10 +461,10 @@ export default function ChatDetailScreen() {
       console.error('Error picking photo:', error);
       showAlert('Error', 'Failed to pick photo. Please try again.');
     }
-  };
+  }, [requestMediaPermissions, uploadMediaAndSend, showAlert]);
 
   // Handle video picker
-  const handlePickVideo = async () => {
+  const handlePickVideo = useCallback(async () => {
     setShowAttachmentModal(false);
     const hasPermission = await requestMediaPermissions();
     if (!hasPermission) return;
@@ -821,10 +484,10 @@ export default function ChatDetailScreen() {
       console.error('Error picking video:', error);
       showAlert('Error', 'Failed to pick video. Please try again.');
     }
-  };
+  }, [requestMediaPermissions, uploadMediaAndSend, showAlert]);
 
   // Request audio recording permissions
-  const requestAudioPermissions = async (): Promise<boolean> => {
+  const requestAudioPermissions = useCallback(async (): Promise<boolean> => {
     if (Platform.OS !== 'web') {
       try {
         const { status } = await Audio.requestPermissionsAsync();
@@ -843,10 +506,10 @@ export default function ChatDetailScreen() {
       }
     }
     return true;
-  };
+  }, [showAlert]);
 
   // Start audio recording
-  const startRecording = async () => {
+  const startRecording = useCallback(async () => {
     try {
       const hasPermission = await requestAudioPermissions();
       if (!hasPermission) return;
@@ -880,10 +543,10 @@ export default function ChatDetailScreen() {
       console.error('Failed to start recording:', error);
       showAlert('Error', 'Failed to start recording. Please try again.');
     }
-  };
+  }, [requestAudioPermissions, showAlert]);
 
   // Stop audio recording
-  const stopRecording = async () => {
+  const stopRecording = useCallback(async () => {
     if (!recording) return;
 
     try {
@@ -903,10 +566,10 @@ export default function ChatDetailScreen() {
       console.error('Failed to stop recording:', error);
       showAlert('Error', 'Failed to stop recording.');
     }
-  };
+  }, [recording, showAlert]);
 
   // Cancel recording
-  const cancelRecording = async () => {
+  const cancelRecording = useCallback(async () => {
     if (recording) {
       try {
         await recording.stopAndUnloadAsync();
@@ -922,13 +585,23 @@ export default function ChatDetailScreen() {
     setIsRecording(false);
     setRecordingUri(null);
     setRecordingDuration(0);
-  };
+  }, [recording]);
 
   // Send recorded audio
-  const sendRecordedAudio = async () => {
+  const sendRecordedAudio = useCallback(async () => {
     if (!recordingUri || !currentUserId || !chatId || sending || isMatched !== true) return;
 
-    setSending(true);
+    const tempId = `temp-audio-${Date.now()}`;
+    // Add optimistic placeholder immediately so the user sees feedback during upload
+    addConfirmedMessage({
+      id: tempId,
+      text: '🎤 Audio message: uploading…',
+      senderId: currentUserId,
+      timestamp: new Date(),
+      isRead: false,
+      isOptimistic: true,
+    });
+
     try {
       // Upload audio to Supabase storage
       const audioFileName = `audio_${Date.now()}.m4a`;
@@ -977,30 +650,42 @@ export default function ChatDetailScreen() {
         throw new Error(result.error || 'Failed to send audio message');
       }
 
+      // Replace optimistic placeholder with the confirmed server message
+      if (result.data) {
+        addConfirmedMessage({
+          id: result.data.id,
+          text: result.data.message_text,
+          senderId: result.data.sender_id,
+          timestamp: result.data.created_at ? new Date(result.data.created_at) : new Date(),
+          isRead: result.data.is_read,
+        });
+        removeMessage(tempId);
+      }
+
       // Reset recording state
       setRecordingUri(null);
       setRecordingDuration(0);
       setShowRecordingModal(false);
 
     } catch (error) {
+      // Mark placeholder as failed so the user sees it rather than it disappearing
+      markMessageFailed(tempId);
       console.error('❌ Error sending audio:', error);
       showAlert('Error', `Failed to send audio: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      setSending(false);
     }
-  };
+  }, [recordingUri, currentUserId, chatId, channelId, sending, isMatched, addConfirmedMessage, markMessageFailed, removeMessage, showAlert]);
 
   // Handle audio picker - now opens recording interface
-  const handlePickAudio = async () => {
+  const handlePickAudio = useCallback(async () => {
     setShowAttachmentModal(false);
     // Show recording interface
     setRecordingUri(null);
     setRecordingDuration(0);
     setShowRecordingModal(true);
-  };
+  }, []);
 
   // Handle taking a new photo with camera
-  const handleTakePhoto = async () => {
+  const handleTakePhoto = useCallback(async () => {
     setShowAttachmentModal(false);
     const hasPermission = await requestCameraPermissions();
     if (!hasPermission) return;
@@ -1019,14 +704,14 @@ export default function ChatDetailScreen() {
       console.error('Error taking photo:', error);
       showAlert('Error', 'Failed to take photo. Please try again.');
     }
-  };
+  }, [requestCameraPermissions, uploadMediaAndSend, showAlert]);
 
   // Format recording duration
-  const formatRecordingDuration = (seconds: number): string => {
+  const formatRecordingDuration = useCallback((seconds: number): string => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
+  }, []);
 
   // Cleanup recording on unmount using a ref so the closure always sees
   // the latest recording instance without re-registering the effect.
@@ -1065,82 +750,24 @@ export default function ChatDetailScreen() {
     checkReported();
   }, [channelId, currentUserId, router]);
 
+
+
   const handleSendMessage = useCallback(async () => {
     if (!messageText.trim() || !currentUserId || !chatId || sending || isMatched !== true) return;
 
     const messageToSend = messageText.trim();
-    const tempId = 'optimistic-' + Date.now();
-
-    // Optimistic update - show message immediately
-    const optimisticMessage: Message = {
-      id: tempId,
-      text: messageToSend,
-      senderId: currentUserId,
-      timestamp: new Date(),
-      isRead: false,
-    };
-
-    setMessages((prev) => [...prev, optimisticMessage]);
     setMessageText('');
-    setSending(true);
 
-    // Stop typing indicator when message is sent
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
-    }
-
-    // Broadcast that we're no longer typing (non-blocking)
+    // Stop typing indicator when message is sent (hook resets on next handleTyping timeout)
     broadcastTypingStatus(currentUserId, channelId, false).catch(() => { });
 
-    try {
-      // OPTIMIZED: Pass channelId to avoid extra getMatch() call
-      const result = await sendMessage(chatId, messageToSend, channelId);
+    await sendText(messageToSend);
 
-      if (result.success) {
-        if (!hasSignaledMessageSent.current) {
-          hasSignaledMessageSent.current = true;
-          signalMessageSent(chatId);
-        }
-      }
-
-      if (!result.success) {
-        console.error('❌ Failed to send message:', result.error);
-        // Remove optimistic message and restore text
-        setMessages((prev) => prev.filter((m) => m.id !== tempId));
-        setMessageText(messageToSend);
-        showAlert('Error', `Failed to send message: ${result.error}`);
-      } else {
-        // Replace optimistic message with real one
-        if (result.data) {
-          setMessages((prev) => {
-            const alreadyAdded = prev.some(m => m.id === result.data!.id);
-            if (alreadyAdded) {
-              return prev.filter(m => m.id !== tempId);
-            }
-            return prev.map((msg) =>
-              msg.id === tempId
-                ? {
-                  id: result.data!.id,
-                  text: result.data!.message_text,
-                  senderId: result.data!.sender_id,
-                  timestamp: result.data!.created_at ? new Date(result.data!.created_at) : new Date(),
-                  isRead: result.data!.is_read,
-                }
-                : msg
-            );
-          });
-        }
-      }
-    } catch (error) {
-      console.error('❌ Error sending message:', error);
-      // Remove optimistic message and restore text
-      setMessages((prev) => prev.filter((m) => m.id !== tempId));
-      setMessageText(messageToSend);
-      showAlert('Error', `Error sending message: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      setSending(false);
+    if (!hasSignaledMessageSent.current) {
+      hasSignaledMessageSent.current = true;
+      signalMessageSent(chatId);
     }
-  }, [channelId, chatId, currentUserId, isMatched, messageText, sending, showAlert]);
+  }, [channelId, currentUserId, isMatched, messageText, sending, sendText]);
 
   const handleBackPress = useCallback(() => {
     router.back();
@@ -1148,10 +775,6 @@ export default function ChatDetailScreen() {
 
   const handleOpenMenu = useCallback(() => {
     setShowMenuModal(true);
-  }, []);
-
-  const handleContentSizeChange = useCallback(() => {
-    scrollViewRef.current?.scrollToEnd({ animated: true });
   }, []);
 
   const handleInputLayout = useCallback((event: any) => {
@@ -1188,18 +811,6 @@ export default function ChatDetailScreen() {
   const sendIconColor = useMemo(
     () => messageText.trim() ? '#FFFFFF' : 'rgba(255, 255, 255, 0.3)',
     [messageText]
-  );
-
-  const renderedMessages = useMemo(
-    () => messages.map((message) => (
-      <MessageRow
-        key={`msg-${message.id}`}
-        message={message}
-        currentUserId={currentUserId}
-        avatar={user?.avatar}
-      />
-    )),
-    [messages, currentUserId, user?.avatar]
   );
 
   if (loading || !user) {
@@ -1246,963 +857,884 @@ export default function ChatDetailScreen() {
 
   return (
     <ErrorBoundary>
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={handleBackPress}
-          activeOpacity={0.7}>
-          <MaterialIcons name="arrow-back" size={24} color="#FFFFFF" />
-        </TouchableOpacity>
-        <View style={styles.headerContent}>
-          <View style={styles.avatarContainer}>
-            <Image source={user.avatar} style={styles.headerAvatar} />
-            {user.isOnline && <View style={styles.onlineIndicator} />}
-          </View>
-          <View style={styles.headerText}>
-            <Text style={styles.headerName}>{user.name}</Text>
-            {isOtherUserTyping ? (
-              <TypingIndicator />
-            ) : connectionStatus === 'disconnected' ? (
-              <Text style={styles.connectionWarning}>⚠️ Reconnecting...</Text>
-            ) : user.isOnline ? (
-              <Text style={styles.onlineStatus}>Online</Text>
-            ) : null}
-          </View>
-        </View>
-        <TouchableOpacity
-          style={styles.moreButton}
-          onPress={handleOpenMenu}
-          activeOpacity={0.7}>
-          <MaterialIcons name="more-vert" size={24} color="#FFFFFF" />
-        </TouchableOpacity>
-      </View>
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+        {/* Header — extracted to ChatHeader component */}
+        <ChatHeader
+          user={user}
+          isOtherUserTyping={isOtherUserTyping}
+          connectionStatus={connectionStatus}
+          onBackPress={handleBackPress}
+          onMenuPress={handleOpenMenu}
+        />
 
-      {/* Messages List */}
-      <KeyboardAvoidingView
-        style={styles.keyboardView}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : (StatusBar.currentHeight ?? 24)}>
-        <ScrollView
-          ref={scrollViewRef as any}
-          style={styles.messagesList}
-          contentContainerStyle={messagesContentStyle}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-          removeClippedSubviews={Platform.OS === 'android'}
-          overScrollMode="never"
-          onContentSizeChange={handleContentSizeChange}>
-          {/* ── Icebreaker Suggestion Chip (empty chat only) ──────────────── */}
-          {messages.length === 0 && icebreaker && !icebreakerDismissed && (
-            <View style={{
-              margin: 20,
-              marginTop: 32,
-              alignItems: 'center',
-            }}>
-              {/* Decorative stars label */}
-              <Text style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11, letterSpacing: 1, marginBottom: 10 }}>
-                ✦ COSMIC ICEBREAKER ✦
-              </Text>
-
-              {/* Chip card */}
-              <TouchableOpacity
-                onPress={handleUseIcebreaker}
-                activeOpacity={0.82}
-                style={{
-                  backgroundColor: 'rgba(139,92,246,0.18)',
-                  borderWidth: 1,
-                  borderColor: 'rgba(139,92,246,0.35)',
-                  borderRadius: 16,
-                  padding: 14,
-                  maxWidth: '88%',
-                  alignItems: 'center',
-                }}>
-                <Text style={{
-                  color: 'rgba(255,255,255,0.88)',
-                  fontSize: 14,
-                  lineHeight: 20,
-                  textAlign: 'center',
-                  fontStyle: 'italic',
-                }}>
-                  "{icebreaker}"
-                </Text>
-                <View style={{
-                  marginTop: 10,
-                  backgroundColor: '#8b5cf6',
-                  borderRadius: 20,
-                  paddingHorizontal: 14,
-                  paddingVertical: 5,
-                }}>
-                  <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>
-                    Tap to use this opener ✨
-                  </Text>
-                </View>
-              </TouchableOpacity>
-
-              {/* Dismiss link */}
-              <TouchableOpacity
-                onPress={handleDismissIcebreaker}
-                hitSlop={{ top: 10, bottom: 10, left: 20, right: 20 }}
-                style={{ marginTop: 8 }}>
-                <Text style={{ color: 'rgba(255,255,255,0.3)', fontSize: 11 }}>
-                  dismiss
-                </Text>
-              </TouchableOpacity>
-            </View>
-          )}
-          {renderedMessages}
-        </ScrollView>
-
-        {/* Input Area */}
-        <View
-          style={styles.inputContainer}
-          onLayout={handleInputLayout}>
-          <TextInput
-            style={styles.textInput}
-            placeholder="Type a message..."
-            placeholderTextColor="rgba(255, 255, 255, 0.5)"
-            value={messageText}
-            onChangeText={handleMessageTextChange}
-            multiline
-            maxLength={500}
+        {/* Messages + Input */}
+        <KeyboardAvoidingView
+          style={styles.keyboardView}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : (StatusBar.currentHeight ?? 24)}>
+          {/* MessageList owns FlatList, scroll-to-bottom, EmptyChatState/icebreaker */}
+          <MessageList
+            ref={messageListRef}
+            messages={messages}
+            currentUserId={currentUserId}
+            avatar={user?.avatar}
+            icebreaker={icebreaker}
+            icebreakerDismissed={icebreakerDismissed}
+            onUseIcebreaker={handleUseIcebreaker}
+            onDismissIcebreaker={handleDismissIcebreaker}
+            contentContainerStyle={messagesContentStyle}
+            onAtBottomChange={(isAtBottom) => { isAtBottomRef.current = isAtBottom; }}
           />
-          <TouchableOpacity
-            style={[
-              styles.sendButton,
-              isSendDisabled && styles.sendButtonDisabled,
-            ]}
-            onPress={handleSendMessage}
-            disabled={isSendDisabled}
-            activeOpacity={0.7}>
-            {sending ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
-            ) : (
-              <MaterialIcons
-                name="send"
-                size={24}
-                color={sendIconColor}
-              />
-            )}
-          </TouchableOpacity>
-        </View>
-      </KeyboardAvoidingView>
 
-      {/* Attachment Options Modal */}
-      <Modal
-        visible={showAttachmentModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowAttachmentModal(false)}>
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowAttachmentModal(false)}>
-          <TouchableOpacity
-            activeOpacity={1}
-            onPress={(e) => e.stopPropagation()}
-            style={styles.attachmentModal}>
-            <View style={styles.attachmentHeader}>
-              <Text style={styles.attachmentTitle}>Attach</Text>
-              <TouchableOpacity
-                onPress={() => setShowAttachmentModal(false)}
-                style={styles.closeButton}>
-                <MaterialIcons name="close" size={24} color="#FFFFFF" />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.attachmentGrid}>
-              {/* Photo */}
-              <TouchableOpacity
-                style={styles.attachmentOption}
-                onPress={handlePickPhoto}
-                activeOpacity={0.7}>
-                <View style={[styles.attachmentIcon, { backgroundColor: '#3B82F6' }]}>
-                  <MaterialIcons name="photo-library" size={28} color="#FFFFFF" />
-                </View>
-                <Text style={styles.attachmentLabel}>Photo</Text>
-              </TouchableOpacity>
-
-              {/* Camera */}
-              <TouchableOpacity
-                style={styles.attachmentOption}
-                onPress={handleTakePhoto}
-                activeOpacity={0.7}>
-                <View style={[styles.attachmentIcon, { backgroundColor: '#10B981' }]}>
-                  <MaterialIcons name="photo-camera" size={28} color="#FFFFFF" />
-                </View>
-                <Text style={styles.attachmentLabel}>Camera</Text>
-              </TouchableOpacity>
-
-              {/* Video */}
-              <TouchableOpacity
-                style={styles.attachmentOption}
-                onPress={handlePickVideo}
-                activeOpacity={0.7}>
-                <View style={[styles.attachmentIcon, { backgroundColor: '#EF4444' }]}>
-                  <MaterialIcons name="videocam" size={28} color="#FFFFFF" />
-                </View>
-                <Text style={styles.attachmentLabel}>Video</Text>
-              </TouchableOpacity>
-
-              {/* Audio */}
-              <TouchableOpacity
-                style={styles.attachmentOption}
-                onPress={handlePickAudio}
-                activeOpacity={0.7}>
-                <View style={[styles.attachmentIcon, { backgroundColor: '#F97316' }]}>
-                  <MaterialIcons name="headphones" size={28} color="#FFFFFF" />
-                </View>
-                <Text style={styles.attachmentLabel}>Audio</Text>
-              </TouchableOpacity>
-            </View>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* Audio Recording Modal */}
-      <Modal
-        visible={showRecordingModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => {
-          if (!isRecording) {
-            setShowRecordingModal(false);
-            cancelRecording();
-          }
-        }}>
-        <View style={styles.recordingModalOverlay}>
-          <View style={styles.recordingModal}>
-            <View style={styles.recordingHeader}>
-              <Text style={styles.recordingTitle}>Record Audio</Text>
-              <TouchableOpacity
-                onPress={() => {
-                  if (!isRecording) {
-                    setShowRecordingModal(false);
-                    cancelRecording();
-                  }
-                }}
-                style={styles.recordingCloseButton}
-                disabled={isRecording}>
-                <MaterialIcons name="close" size={24} color="#1B1528" />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.recordingContent}>
-              {!recordingUri ? (
-                <>
-                  {/* Recording Interface */}
-                  <View style={styles.recordingVisualizer}>
-                    {isRecording ? (
-                      <>
-                        <View style={styles.recordingIndicator}>
-                          <View style={styles.recordingDot} />
-                          <Text style={styles.recordingStatusText}>Recording...</Text>
-                        </View>
-                        <Text style={styles.recordingDurationText}>
-                          {formatRecordingDuration(recordingDuration)}
-                        </Text>
-                      </>
-                    ) : (
-                      <>
-                        <MaterialIcons name="mic" size={64} color="#6B7280" />
-                        <Text style={styles.recordingPromptText}>
-                          Tap the button below to start recording
-                        </Text>
-                      </>
-                    )}
-                  </View>
-
-                  <View style={styles.recordingControls}>
-                    {!isRecording ? (
-                      <TouchableOpacity
-                        style={styles.recordButton}
-                        onPress={startRecording}
-                        activeOpacity={0.8}>
-                        <MaterialIcons name="fiber-manual-record" size={48} color="#EF4444" />
-                      </TouchableOpacity>
-                    ) : (
-                      <TouchableOpacity
-                        style={styles.stopButton}
-                        onPress={stopRecording}
-                        activeOpacity={0.8}>
-                        <MaterialIcons name="stop" size={48} color="#FFFFFF" />
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                </>
-              ) : (
-                <>
-                  {/* Playback Interface */}
-                  <View style={styles.playbackContainer}>
-                    <MaterialIcons name="audiotrack" size={64} color="#10B981" />
-                    <Text style={styles.playbackText}>Recording Complete</Text>
-                    <Text style={styles.playbackDuration}>
-                      Duration: {formatRecordingDuration(recordingDuration)}
-                    </Text>
-                  </View>
-
-                  <View style={styles.playbackControls}>
-                    <TouchableOpacity
-                      style={styles.cancelButton}
-                      onPress={() => {
-                        cancelRecording();
-                        setShowRecordingModal(false);
-                      }}
-                      activeOpacity={0.8}>
-                      <Text style={styles.cancelButtonText}>Cancel</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.recordingSendButton}
-                      onPress={sendRecordedAudio}
-                      disabled={sending}
-                      activeOpacity={0.8}>
-                      {sending ? (
-                        <ActivityIndicator size="small" color="#FFFFFF" />
-                      ) : (
-                        <>
-                          <MaterialIcons name="send" size={20} color="#FFFFFF" />
-                          <Text style={styles.recordingSendButtonText}>Send</Text>
-                        </>
-                      )}
-                    </TouchableOpacity>
-                  </View>
-                </>
-              )}
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Menu Modal */}
-      <Modal
-        visible={showMenuModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowMenuModal(false)}>
-        <TouchableOpacity
-          style={styles.menuModalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowMenuModal(false)}>
-          <View style={styles.menuModal}>
-            <TouchableOpacity
-              style={styles.menuOption}
-              onPress={() => {
-                setShowMenuModal(false);
-                setShowDidYouMeetModal(true);
-              }}
-              activeOpacity={0.7}>
-              <Text style={styles.menuOptionText}>Did you meet?</Text>
-            </TouchableOpacity>
-            <View style={styles.menuDivider} />
-            <TouchableOpacity
-              style={styles.menuOption}
-              onPress={() => {
-                setShowMenuModal(false);
-                setShowUnmatchModal(true);
-              }}
-              activeOpacity={0.7}>
-              <Text style={styles.menuOptionText}>Unmatch</Text>
-            </TouchableOpacity>
-            <View style={styles.menuDivider} />
-            <TouchableOpacity
-              style={styles.menuOption}
-              onPress={() => {
-                setShowMenuModal(false);
-                // Reset report states when starting new report
-                setReportSaved(false);
-                setSelectedReportCategory('');
-                setSelectedReportSubcategory('');
-                setReportDetails('');
-                setShowReportModal(true);
-              }}
-              activeOpacity={0.7}>
-              <Text style={[styles.menuOptionText, styles.menuOptionTextDanger]}>Report</Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* Did You Meet Modal */}
-      <Modal
-        visible={showDidYouMeetModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowDidYouMeetModal(false)}>
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowDidYouMeetModal(false)}>
-          <View style={styles.didYouMeetModal}>
-            <TouchableOpacity
-              style={styles.modalCloseButton}
-              onPress={() => setShowDidYouMeetModal(false)}
-              activeOpacity={0.7}>
-              <MaterialIcons name="close" size={24} color="#1B1528" />
-            </TouchableOpacity>
-            <Text style={styles.didYouMeetTitle}>
-              Did you and {user?.name} meet?
-            </Text>
-            <Text style={styles.didYouMeetSubtitle}>
-              We'll never share your answer. It just helps us learn more about the best people to show you.
-            </Text>
-            <TouchableOpacity
-              style={styles.didYouMeetButton}
-              onPress={() => {
-                setShowDidYouMeetModal(false);
-                setShowSeeAgainModal(true);
-              }}
-              activeOpacity={0.8}>
-              <Text style={styles.didYouMeetButtonText}>Yes, we met</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.didYouMeetButtonSecondary}
-              onPress={() => {
-                setShowDidYouMeetModal(false);
-              }}
-              activeOpacity={0.8}>
-              <Text style={styles.didYouMeetButtonTextSecondary}>No, we didn't meet</Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* See Again Modal */}
-      <Modal
-        visible={showSeeAgainModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowSeeAgainModal(false)}>
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowSeeAgainModal(false)}>
-          <View style={styles.seeAgainModal}>
-            <TouchableOpacity
-              style={styles.modalCloseButton}
-              onPress={() => setShowSeeAgainModal(false)}
-              activeOpacity={0.7}>
-              <MaterialIcons name="close" size={24} color="#1B1528" />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.modalBackButton}
-              onPress={() => {
-                setShowSeeAgainModal(false);
-                setShowDidYouMeetModal(true);
-              }}
-              activeOpacity={0.7}>
-              <MaterialIcons name="arrow-back" size={24} color="#1B1528" />
-            </TouchableOpacity>
-            <Text style={styles.seeAgainTitle}>
-              Is {user?.name} the kind of person you'd like to see again?
-            </Text>
-            <Text style={styles.seeAgainSubtitle}>
-              We'll keep this answer private, too.
-            </Text>
-            <TouchableOpacity
-              style={styles.seeAgainButton}
-              onPress={() => {
-                setShowSeeAgainModal(false);
-                setShowThanksModal(true);
-              }}
-              activeOpacity={0.8}>
-              <Text style={styles.seeAgainButtonText}>Yes</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.seeAgainButtonSecondary}
-              onPress={() => {
-                setShowSeeAgainModal(false);
-                setShowThanksModal(true);
-              }}
-              activeOpacity={0.8}>
-              <Text style={styles.seeAgainButtonTextSecondary}>No</Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* Thanks Modal */}
-      <Modal
-        visible={showThanksModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowThanksModal(false)}>
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowThanksModal(false)}>
-          <View style={styles.thanksModal}>
-            <TouchableOpacity
-              style={styles.modalCloseButton}
-              onPress={() => setShowThanksModal(false)}
-              activeOpacity={0.7}>
-              <MaterialIcons name="close" size={24} color="#1B1528" />
-            </TouchableOpacity>
-            <View style={styles.thanksIllustration}>
-              <Text style={styles.thanksHeart}>🤝</Text>
-            </View>
-            <Text style={styles.thanksTitle}>Thanks for sharing!</Text>
-            <Text style={styles.thanksSubtitle}>
-              We love to hear that! Your answers help us find more great people for you to date.
-            </Text>
-            <TouchableOpacity
-              style={styles.thanksButton}
-              onPress={() => setShowThanksModal(false)}
-              activeOpacity={0.8}>
-              <Text style={styles.thanksButtonText}>Done</Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* Unmatch Modal */}
-      <Modal
-        visible={showUnmatchModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowUnmatchModal(false)}>
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowUnmatchModal(false)}>
-          <View style={styles.unmatchModal}>
-            <TouchableOpacity
-              style={styles.modalCloseButton}
-              onPress={() => setShowUnmatchModal(false)}
-              activeOpacity={0.7}>
-              <MaterialIcons name="close" size={24} color="#1B1528" />
-            </TouchableOpacity>
-            <View style={styles.unmatchCheckmark}>
-              <MaterialIcons name="check-circle" size={48} color="#10B981" />
-            </View>
-            <Text style={styles.unmatchTitle}>You've unmatched {user?.name}</Text>
-            <Text style={styles.unmatchSubtitle}>
-              Could you tell us why? Your reason will help us show you the right people. They won't know why you've unmatched.
-            </Text>
-            <View style={styles.unmatchReasonsList}>
-              {[
-                "We've moved off the app",
-                "Different relationship goals",
-                "They didn't reply",
-                "They made me feel uncomfortable",
-                "Something else"
-              ].map((reason, index) => (
-                <TouchableOpacity
-                  key={index}
-                  style={styles.unmatchReasonOption}
-                  onPress={() => {
-                    setSelectedUnmatchReason(reason);
-                    setShowUnmatchModal(false);
-                    setShowUnmatchReasonModal(true);
-                  }}
-                  activeOpacity={0.7}>
-                  <Text style={styles.unmatchReasonText}>{reason}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* Unmatch Reason Confirmation Modal */}
-      <Modal
-        visible={showUnmatchReasonModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowUnmatchReasonModal(false)}>
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowUnmatchReasonModal(false)}>
-          <View style={styles.unmatchReasonModal}>
-            <TouchableOpacity
-              style={styles.modalCloseButton}
-              onPress={() => setShowUnmatchReasonModal(false)}
-              activeOpacity={0.7}>
-              <MaterialIcons name="close" size={24} color="#1B1528" />
-            </TouchableOpacity>
-            <View style={styles.thanksIllustration}>
-              <Text style={styles.thanksHeart}>🤝</Text>
-            </View>
-            <Text style={styles.thanksTitle}>Thanks for sharing!</Text>
-            <Text style={styles.thanksSubtitle}>
-              We love to hear that! Your answers help us find more great people for you to date.
-            </Text>
-            <TouchableOpacity
-              style={styles.thanksButton}
-              onPress={async () => {
-                setShowUnmatchReasonModal(false);
-                // Delete match and messages when unmatching
-                await handleUnmatchAndDelete();
-              }}
-              activeOpacity={0.8}>
-              <Text style={styles.thanksButtonText}>Done</Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* Report Modal - First Screen */}
-      <Modal
-        visible={showReportModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowReportModal(false)}>
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowReportModal(false)}>
-          <View style={styles.reportModal}>
-            <TouchableOpacity
-              style={styles.modalCloseButton}
-              onPress={() => setShowReportModal(false)}
-              activeOpacity={0.7}>
-              <MaterialIcons name="close" size={24} color="#1B1528" />
-            </TouchableOpacity>
-            <Text style={styles.reportTitle}>Report {user?.name}</Text>
-            <Text style={styles.reportDescription}>
-              Let us know when someone's broken our guidelines. They won't know that you've reported them, or why.
-            </Text>
-
-            <View style={styles.reportStepsContainer}>
-              <View style={styles.reportStep}>
-                <View style={styles.reportStepNumber}>
-                  <Text style={styles.reportStepNumberText}>1</Text>
-                </View>
-                <Text style={styles.reportStepText}>Let us know what happened</Text>
-              </View>
-              <View style={styles.reportStep}>
-                <View style={styles.reportStepNumber}>
-                  <Text style={styles.reportStepNumberText}>2</Text>
-                </View>
-                <Text style={styles.reportStepText}>We'll investigate your report</Text>
-              </View>
-              <View style={styles.reportStep}>
-                <View style={styles.reportStepNumber}>
-                  <Text style={styles.reportStepNumberText}>3</Text>
-                </View>
-                <Text style={styles.reportStepText}>We'll keep you updated</Text>
-              </View>
-            </View>
-
-            <View style={styles.unmatchSuggestion}>
-              <MaterialIcons name="close" size={16} color="#6B7280" />
-              <Text style={styles.unmatchSuggestionText}>
-                Don't think they've broken our guidelines? Unmatch instead
-              </Text>
-            </View>
-
-            <TouchableOpacity
-              style={styles.reportStartButton}
-              onPress={() => {
-                setShowReportModal(false);
-                setShowReportCategoryModal(true);
-              }}
-              activeOpacity={0.8}>
-              <Text style={styles.reportStartButtonText}>Start report</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.reportUnmatchButton}
-              onPress={() => {
-                setShowReportModal(false);
-                setShowUnmatchModal(true);
-              }}
-              activeOpacity={0.8}>
-              <Text style={styles.reportUnmatchButtonText}>Unmatch instead</Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* Report Category Modal - Second Screen */}
-      <Modal
-        visible={showReportCategoryModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowReportCategoryModal(false)}>
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowReportCategoryModal(false)}>
-          <View style={styles.reportCategoryModal}>
-            <TouchableOpacity
-              style={styles.modalBackButton}
-              onPress={() => {
-                setShowReportCategoryModal(false);
-                setShowReportModal(true);
-              }}
-              activeOpacity={0.7}>
-              <MaterialIcons name="arrow-back" size={24} color="#1B1528" />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.modalCloseButton}
-              onPress={() => setShowReportCategoryModal(false)}
-              activeOpacity={0.7}>
-              <MaterialIcons name="close" size={24} color="#1B1528" />
-            </TouchableOpacity>
-            <Text style={styles.reportCategoryTitle}>What do you want to report?</Text>
-            <Text style={styles.reportCategorySubtitle}>
-              We'll keep this private, and they won't know you've reported them. This helps us keep AstroDate safe.
-            </Text>
-
-            <View style={styles.reportCategoryList}>
-              {[
-                "Something on their profile",
-                "Behavior on AstroDate",
-                "They shouldn't be on AstroDate"
-              ].map((category, index) => (
-                <TouchableOpacity
-                  key={index}
-                  style={styles.reportCategoryOption}
-                  onPress={() => {
-                    setSelectedReportCategory(category);
-                    setShowReportCategoryModal(false);
-                    setShowReportSubcategoryModal(true);
-                  }}
-                  activeOpacity={0.7}>
-                  <Text style={styles.reportCategoryOptionText}>{category}</Text>
-                  <MaterialIcons name="chevron-right" size={24} color="#6B7280" />
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* Report Subcategory Modal - Third Screen */}
-      <Modal
-        visible={showReportSubcategoryModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowReportSubcategoryModal(false)}>
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowReportSubcategoryModal(false)}>
-          <View style={styles.reportSubcategoryModal}>
-            <TouchableOpacity
-              style={styles.modalBackButton}
-              onPress={() => {
-                setShowReportSubcategoryModal(false);
-                setShowReportCategoryModal(true);
-              }}
-              activeOpacity={0.7}>
-              <MaterialIcons name="arrow-back" size={24} color="#1B1528" />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.modalCloseButton}
-              onPress={() => setShowReportSubcategoryModal(false)}
-              activeOpacity={0.7}>
-              <MaterialIcons name="close" size={24} color="#1B1528" />
-            </TouchableOpacity>
-            <Text style={styles.reportSubcategoryTitle}>{selectedReportCategory}</Text>
-
-            <View style={styles.reportSubcategoryList}>
-              {getSubcategoriesForCategory(selectedReportCategory).map((subcategory, index) => (
-                <TouchableOpacity
-                  key={index}
-                  style={styles.reportSubcategoryOption}
-                  onPress={async () => {
-                    setSelectedReportSubcategory(subcategory);
-                    setShowReportSubcategoryModal(false);
-                    // Show describe page logic:
-                    // - "Something on their profile": Always show describe page for all subcategories
-                    // - "Behavior on AstroDate": Only show describe page for "Other" subcategory
-                    // - "They shouldn't be on AstroDate": Only show describe page for "Other" subcategory
-                    if (selectedReportCategory === "Something on their profile") {
-                      // Always show describe page for "Something on their profile"
-                      setShowReportDetailsModal(true);
-                    } else if (selectedReportCategory === "Behavior on AstroDate") {
-                      // Only show describe page if "Other" is selected
-                      if (subcategory === "Other") {
-                        setShowReportDetailsModal(true);
-                      } else {
-                        // For other subcategories, save report and go directly to confirmation
-                        if (chatId && !reportSaved) {
-                          const reportResult = await createReport(chatId, selectedReportCategory, subcategory, undefined, channelId);
-                          if (reportResult.success) {
-                            setReportSaved(true);
-                          } else {
-                            console.error('❌ Failed to save report:', reportResult.error);
-                            showAlert('Error', 'Failed to save report. Please try again.');
-                            return;
-                          }
-                        }
-                        setTimeout(() => {
-                          setShowReportConfirmationModal(true);
-                        }, 300);
-                      }
-                    } else if (selectedReportCategory === "They shouldn't be on AstroDate") {
-                      // Only show describe page if "Other" is selected
-                      if (subcategory === "Other") {
-                        setShowReportDetailsModal(true);
-                      } else {
-                        // For other subcategories, save report and go directly to confirmation
-                        if (chatId && !reportSaved) {
-                          const reportResult = await createReport(chatId, selectedReportCategory, subcategory, undefined, channelId);
-                          if (reportResult.success) {
-                            setReportSaved(true);
-                          } else {
-                            console.error('❌ Failed to save report:', reportResult.error);
-                            showAlert('Error', 'Failed to save report. Please try again.');
-                            return;
-                          }
-                        }
-                        setTimeout(() => {
-                          setShowReportConfirmationModal(true);
-                        }, 300);
-                      }
-                    }
-                  }}
-                  activeOpacity={0.7}>
-                  <Text style={styles.reportSubcategoryOptionText}>{subcategory}</Text>
-                  <MaterialIcons name="chevron-right" size={24} color="#6B7280" />
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* Report Details Modal - Fourth Screen (Intermediate) */}
-      <Modal
-        visible={showReportDetailsModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowReportDetailsModal(false)}>
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowReportDetailsModal(false)}>
-          <View style={styles.reportDetailsModal}>
-            <TouchableOpacity
-              style={styles.modalBackButton}
-              onPress={() => {
-                setShowReportDetailsModal(false);
-                setShowReportSubcategoryModal(true);
-              }}
-              activeOpacity={0.7}>
-              <MaterialIcons name="arrow-back" size={24} color="#1B1528" />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.modalCloseButton}
-              onPress={() => setShowReportDetailsModal(false)}
-              activeOpacity={0.7}>
-              <MaterialIcons name="close" size={24} color="#1B1528" />
-            </TouchableOpacity>
-            <Text style={styles.reportDetailsTitle}>
-              Tell us more about {selectedReportSubcategory}
-            </Text>
-            <Text style={styles.reportDetailsSubtitle}>
-              Please provide additional details to help us investigate your report.
-            </Text>
+          {/* Input Area */}
+          <View
+            style={styles.inputContainer}
+            onLayout={handleInputLayout}>
             <TextInput
-              style={styles.reportDetailsInput}
-              placeholder="Describe what happened..."
-              placeholderTextColor="#9CA3AF"
+              style={styles.textInput}
+              placeholder="Type a message..."
+              placeholderTextColor="rgba(255, 255, 255, 0.5)"
+              value={messageText}
+              onChangeText={handleMessageTextChange}
               multiline
-              numberOfLines={6}
-              textAlignVertical="top"
-              value={reportDetails}
-              onChangeText={setReportDetails}
+              maxLength={500}
             />
             <TouchableOpacity
-              style={styles.reportSubmitButton}
-              onPress={async () => {
-                // Save report to database
-                if (chatId && selectedReportCategory && selectedReportSubcategory && !reportSaved) {
-                  const reportResult = await createReport(
-                    chatId,
-                    selectedReportCategory,
-                    selectedReportSubcategory,
-                    reportDetails,
-                    channelId
-                  );
-                  if (reportResult.success) {
-                    setReportSaved(true);
-                  } else {
-                    console.error('❌ Failed to save report:', reportResult.error);
-                    showAlert('Error', 'Failed to save report. Please try again.');
-                    return;
-                  }
-                }
-                setShowReportDetailsModal(false);
-                setTimeout(() => {
-                  setShowReportConfirmationModal(true);
-                }, 300);
-              }}
-              activeOpacity={0.8}>
-              <Text style={styles.reportSubmitButtonText}>Submit Report</Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* Report Confirmation Modal - Fifth Screen (Final) */}
-      <Modal
-        visible={showReportConfirmationModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowReportConfirmationModal(false)}>
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowReportConfirmationModal(false)}>
-          <View style={styles.reportConfirmationModal}>
-            <TouchableOpacity
-              style={styles.modalCloseButton}
-              onPress={() => setShowReportConfirmationModal(false)}
+              style={[
+                styles.sendButton,
+                isSendDisabled && styles.sendButtonDisabled,
+              ]}
+              onPress={handleSendMessage}
+              disabled={isSendDisabled}
               activeOpacity={0.7}>
-              <MaterialIcons name="close" size={24} color="#1B1528" />
-            </TouchableOpacity>
-            <View style={styles.reportCheckmark}>
-              <MaterialIcons name="check-circle" size={64} color="#10B981" />
-            </View>
-            <Text style={styles.reportConfirmationTitle}>
-              You've blocked and reported {user?.name}
-            </Text>
-            <Text style={styles.reportConfirmationSubtitle}>
-              Thanks for helping protect the AstroDate community. You'll receive updates on your report in the Help Hub on your profile page.
-            </Text>
-            <TouchableOpacity
-              style={styles.reportDoneButton}
-              onPress={async () => {
-                setShowReportConfirmationModal(false);
-                // Report should already be saved at this point
-                // If for some reason it wasn't saved, try one more time
-                if (!reportSaved && chatId && selectedReportCategory && selectedReportSubcategory) {
-                  const reportResult = await createReport(
-                    chatId,
-                    selectedReportCategory,
-                    selectedReportSubcategory,
-                    reportDetails || undefined,
-                    channelId
-                  );
-                  if (reportResult.success) {
-                    setReportSaved(true);
-                    // Wait a moment for the report to be saved, then navigate
-                    await new Promise(resolve => setTimeout(resolve, 300));
-                  } else {
-                    console.error('❌ Failed to save report (fallback):', reportResult.error);
-                    showAlert('Error', 'Failed to save report. Please try again.');
-                    return;
-                  }
-                } else if (reportSaved) {
-                  // Wait a moment to ensure backend has processed the report
-                  await new Promise(resolve => setTimeout(resolve, 200));
-                }
-                // Only remove from frontend, keep in backend for review
-                // Chat will be immediately removed from frontend (chats and matches)
-                // Messages will remain in backend and NOT be deleted after 5 minutes
-                await handleReport();
-              }}
-              activeOpacity={0.8}>
-              <Text style={styles.reportDoneButtonText}>Done</Text>
+              {sending ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <MaterialIcons
+                  name="send"
+                  size={24}
+                  color={sendIconColor}
+                />
+              )}
             </TouchableOpacity>
           </View>
-        </TouchableOpacity>
-      </Modal>
-    </SafeAreaView>
+        </KeyboardAvoidingView>
+
+        {/* Attachment Options Modal */}
+        <Modal
+          visible={showAttachmentModal}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setShowAttachmentModal(false)}>
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowAttachmentModal(false)}>
+            <TouchableOpacity
+              activeOpacity={1}
+              onPress={(e) => e.stopPropagation()}
+              style={styles.attachmentModal}>
+              <View style={styles.attachmentHeader}>
+                <Text style={styles.attachmentTitle}>Attach</Text>
+                <TouchableOpacity
+                  onPress={() => setShowAttachmentModal(false)}
+                  style={styles.closeButton}>
+                  <MaterialIcons name="close" size={24} color="#FFFFFF" />
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.attachmentGrid}>
+                {/* Photo */}
+                <TouchableOpacity
+                  style={styles.attachmentOption}
+                  onPress={handlePickPhoto}
+                  activeOpacity={0.7}>
+                  <View style={[styles.attachmentIcon, { backgroundColor: '#3B82F6' }]}>
+                    <MaterialIcons name="photo-library" size={28} color="#FFFFFF" />
+                  </View>
+                  <Text style={styles.attachmentLabel}>Photo</Text>
+                </TouchableOpacity>
+
+                {/* Camera */}
+                <TouchableOpacity
+                  style={styles.attachmentOption}
+                  onPress={handleTakePhoto}
+                  activeOpacity={0.7}>
+                  <View style={[styles.attachmentIcon, { backgroundColor: '#10B981' }]}>
+                    <MaterialIcons name="photo-camera" size={28} color="#FFFFFF" />
+                  </View>
+                  <Text style={styles.attachmentLabel}>Camera</Text>
+                </TouchableOpacity>
+
+                {/* Video */}
+                <TouchableOpacity
+                  style={styles.attachmentOption}
+                  onPress={handlePickVideo}
+                  activeOpacity={0.7}>
+                  <View style={[styles.attachmentIcon, { backgroundColor: '#EF4444' }]}>
+                    <MaterialIcons name="videocam" size={28} color="#FFFFFF" />
+                  </View>
+                  <Text style={styles.attachmentLabel}>Video</Text>
+                </TouchableOpacity>
+
+                {/* Audio */}
+                <TouchableOpacity
+                  style={styles.attachmentOption}
+                  onPress={handlePickAudio}
+                  activeOpacity={0.7}>
+                  <View style={[styles.attachmentIcon, { backgroundColor: '#F97316' }]}>
+                    <MaterialIcons name="headphones" size={28} color="#FFFFFF" />
+                  </View>
+                  <Text style={styles.attachmentLabel}>Audio</Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Audio Recording Modal */}
+        <Modal
+          visible={showRecordingModal}
+          transparent
+          animationType="slide"
+          onRequestClose={() => {
+            if (!isRecording) {
+              setShowRecordingModal(false);
+              cancelRecording();
+            }
+          }}>
+          <View style={styles.recordingModalOverlay}>
+            <View style={styles.recordingModal}>
+              <View style={styles.recordingHeader}>
+                <Text style={styles.recordingTitle}>Record Audio</Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    if (!isRecording) {
+                      setShowRecordingModal(false);
+                      cancelRecording();
+                    }
+                  }}
+                  style={styles.recordingCloseButton}
+                  disabled={isRecording}>
+                  <MaterialIcons name="close" size={24} color="#1B1528" />
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.recordingContent}>
+                {!recordingUri ? (
+                  <>
+                    {/* Recording Interface */}
+                    <View style={styles.recordingVisualizer}>
+                      {isRecording ? (
+                        <>
+                          <View style={styles.recordingIndicator}>
+                            <View style={styles.recordingDot} />
+                            <Text style={styles.recordingStatusText}>Recording...</Text>
+                          </View>
+                          <Text style={styles.recordingDurationText}>
+                            {formatRecordingDuration(recordingDuration)}
+                          </Text>
+                        </>
+                      ) : (
+                        <>
+                          <MaterialIcons name="mic" size={64} color="#6B7280" />
+                          <Text style={styles.recordingPromptText}>
+                            Tap the button below to start recording
+                          </Text>
+                        </>
+                      )}
+                    </View>
+
+                    <View style={styles.recordingControls}>
+                      {!isRecording ? (
+                        <TouchableOpacity
+                          style={styles.recordButton}
+                          onPress={startRecording}
+                          activeOpacity={0.8}>
+                          <MaterialIcons name="fiber-manual-record" size={48} color="#EF4444" />
+                        </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity
+                          style={styles.stopButton}
+                          onPress={stopRecording}
+                          activeOpacity={0.8}>
+                          <MaterialIcons name="stop" size={48} color="#FFFFFF" />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </>
+                ) : (
+                  <>
+                    {/* Playback Interface */}
+                    <View style={styles.playbackContainer}>
+                      <MaterialIcons name="audiotrack" size={64} color="#10B981" />
+                      <Text style={styles.playbackText}>Recording Complete</Text>
+                      <Text style={styles.playbackDuration}>
+                        Duration: {formatRecordingDuration(recordingDuration)}
+                      </Text>
+                    </View>
+
+                    <View style={styles.playbackControls}>
+                      <TouchableOpacity
+                        style={styles.cancelButton}
+                        onPress={() => {
+                          cancelRecording();
+                          setShowRecordingModal(false);
+                        }}
+                        activeOpacity={0.8}>
+                        <Text style={styles.cancelButtonText}>Cancel</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.recordingSendButton}
+                        onPress={sendRecordedAudio}
+                        disabled={sending}
+                        activeOpacity={0.8}>
+                        {sending ? (
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                        ) : (
+                          <>
+                            <MaterialIcons name="send" size={20} color="#FFFFFF" />
+                            <Text style={styles.recordingSendButtonText}>Send</Text>
+                          </>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                )}
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Menu Modal */}
+        <Modal
+          visible={showMenuModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowMenuModal(false)}>
+          <TouchableOpacity
+            style={styles.menuModalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowMenuModal(false)}>
+            <View style={styles.menuModal}>
+              <TouchableOpacity
+                style={styles.menuOption}
+                onPress={() => {
+                  setShowMenuModal(false);
+                  setShowDidYouMeetModal(true);
+                }}
+                activeOpacity={0.7}>
+                <Text style={styles.menuOptionText}>Did you meet?</Text>
+              </TouchableOpacity>
+              <View style={styles.menuDivider} />
+              <TouchableOpacity
+                style={styles.menuOption}
+                onPress={() => {
+                  setShowMenuModal(false);
+                  setShowUnmatchModal(true);
+                }}
+                activeOpacity={0.7}>
+                <Text style={styles.menuOptionText}>Unmatch</Text>
+              </TouchableOpacity>
+              <View style={styles.menuDivider} />
+              <TouchableOpacity
+                style={styles.menuOption}
+                onPress={() => {
+                  setShowMenuModal(false);
+                  // Reset report states when starting new report
+                  setReportSaved(false);
+                  setSelectedReportCategory('');
+                  setSelectedReportSubcategory('');
+                  setReportDetails('');
+                  setShowReportModal(true);
+                }}
+                activeOpacity={0.7}>
+                <Text style={[styles.menuOptionText, styles.menuOptionTextDanger]}>Report</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Did You Meet Modal */}
+        <Modal
+          visible={showDidYouMeetModal}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setShowDidYouMeetModal(false)}>
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowDidYouMeetModal(false)}>
+            <View style={styles.didYouMeetModal}>
+              <TouchableOpacity
+                style={styles.modalCloseButton}
+                onPress={() => setShowDidYouMeetModal(false)}
+                activeOpacity={0.7}>
+                <MaterialIcons name="close" size={24} color="#1B1528" />
+              </TouchableOpacity>
+              <Text style={styles.didYouMeetTitle}>
+                Did you and {user?.name} meet?
+              </Text>
+              <Text style={styles.didYouMeetSubtitle}>
+                We'll never share your answer. It just helps us learn more about the best people to show you.
+              </Text>
+              <TouchableOpacity
+                style={styles.didYouMeetButton}
+                onPress={() => {
+                  setShowDidYouMeetModal(false);
+                  setShowSeeAgainModal(true);
+                }}
+                activeOpacity={0.8}>
+                <Text style={styles.didYouMeetButtonText}>Yes, we met</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.didYouMeetButtonSecondary}
+                onPress={() => {
+                  setShowDidYouMeetModal(false);
+                }}
+                activeOpacity={0.8}>
+                <Text style={styles.didYouMeetButtonTextSecondary}>No, we didn't meet</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* See Again Modal */}
+        <Modal
+          visible={showSeeAgainModal}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setShowSeeAgainModal(false)}>
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowSeeAgainModal(false)}>
+            <View style={styles.seeAgainModal}>
+              <TouchableOpacity
+                style={styles.modalCloseButton}
+                onPress={() => setShowSeeAgainModal(false)}
+                activeOpacity={0.7}>
+                <MaterialIcons name="close" size={24} color="#1B1528" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.modalBackButton}
+                onPress={() => {
+                  setShowSeeAgainModal(false);
+                  setShowDidYouMeetModal(true);
+                }}
+                activeOpacity={0.7}>
+                <MaterialIcons name="arrow-back" size={24} color="#1B1528" />
+              </TouchableOpacity>
+              <Text style={styles.seeAgainTitle}>
+                Is {user?.name} the kind of person you'd like to see again?
+              </Text>
+              <Text style={styles.seeAgainSubtitle}>
+                We'll keep this answer private, too.
+              </Text>
+              <TouchableOpacity
+                style={styles.seeAgainButton}
+                onPress={() => {
+                  setShowSeeAgainModal(false);
+                  setShowThanksModal(true);
+                }}
+                activeOpacity={0.8}>
+                <Text style={styles.seeAgainButtonText}>Yes</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.seeAgainButtonSecondary}
+                onPress={() => {
+                  setShowSeeAgainModal(false);
+                  setShowThanksModal(true);
+                }}
+                activeOpacity={0.8}>
+                <Text style={styles.seeAgainButtonTextSecondary}>No</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Thanks Modal */}
+        <Modal
+          visible={showThanksModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowThanksModal(false)}>
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowThanksModal(false)}>
+            <View style={styles.thanksModal}>
+              <TouchableOpacity
+                style={styles.modalCloseButton}
+                onPress={() => setShowThanksModal(false)}
+                activeOpacity={0.7}>
+                <MaterialIcons name="close" size={24} color="#1B1528" />
+              </TouchableOpacity>
+              <View style={styles.thanksIllustration}>
+                <Text style={styles.thanksHeart}>🤝</Text>
+              </View>
+              <Text style={styles.thanksTitle}>Thanks for sharing!</Text>
+              <Text style={styles.thanksSubtitle}>
+                We love to hear that! Your answers help us find more great people for you to date.
+              </Text>
+              <TouchableOpacity
+                style={styles.thanksButton}
+                onPress={() => setShowThanksModal(false)}
+                activeOpacity={0.8}>
+                <Text style={styles.thanksButtonText}>Done</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Unmatch Modal */}
+        <Modal
+          visible={showUnmatchModal}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setShowUnmatchModal(false)}>
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowUnmatchModal(false)}>
+            <View style={styles.unmatchModal}>
+              <TouchableOpacity
+                style={styles.modalCloseButton}
+                onPress={() => setShowUnmatchModal(false)}
+                activeOpacity={0.7}>
+                <MaterialIcons name="close" size={24} color="#1B1528" />
+              </TouchableOpacity>
+              <View style={styles.unmatchCheckmark}>
+                <MaterialIcons name="check-circle" size={48} color="#10B981" />
+              </View>
+              <Text style={styles.unmatchTitle}>You've unmatched {user?.name}</Text>
+              <Text style={styles.unmatchSubtitle}>
+                Could you tell us why? Your reason will help us show you the right people. They won't know why you've unmatched.
+              </Text>
+              <View style={styles.unmatchReasonsList}>
+                {[
+                  "We've moved off the app",
+                  "Different relationship goals",
+                  "They didn't reply",
+                  "They made me feel uncomfortable",
+                  "Something else"
+                ].map((reason, index) => (
+                  <TouchableOpacity
+                    key={index}
+                    style={styles.unmatchReasonOption}
+                    onPress={() => {
+                      setSelectedUnmatchReason(reason);
+                      setShowUnmatchModal(false);
+                      setShowUnmatchReasonModal(true);
+                    }}
+                    activeOpacity={0.7}>
+                    <Text style={styles.unmatchReasonText}>{reason}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Unmatch Reason Confirmation Modal */}
+        <Modal
+          visible={showUnmatchReasonModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowUnmatchReasonModal(false)}>
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowUnmatchReasonModal(false)}>
+            <View style={styles.unmatchReasonModal}>
+              <TouchableOpacity
+                style={styles.modalCloseButton}
+                onPress={() => setShowUnmatchReasonModal(false)}
+                activeOpacity={0.7}>
+                <MaterialIcons name="close" size={24} color="#1B1528" />
+              </TouchableOpacity>
+              <View style={styles.thanksIllustration}>
+                <Text style={styles.thanksHeart}>🤝</Text>
+              </View>
+              <Text style={styles.thanksTitle}>Thanks for sharing!</Text>
+              <Text style={styles.thanksSubtitle}>
+                We love to hear that! Your answers help us find more great people for you to date.
+              </Text>
+              <TouchableOpacity
+                style={styles.thanksButton}
+                onPress={async () => {
+                  setShowUnmatchReasonModal(false);
+                  // Delete match and messages when unmatching
+                  await handleUnmatchAndDelete();
+                }}
+                activeOpacity={0.8}>
+                <Text style={styles.thanksButtonText}>Done</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Report Modal - First Screen */}
+        <Modal
+          visible={showReportModal}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setShowReportModal(false)}>
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowReportModal(false)}>
+            <View style={styles.reportModal}>
+              <TouchableOpacity
+                style={styles.modalCloseButton}
+                onPress={() => setShowReportModal(false)}
+                activeOpacity={0.7}>
+                <MaterialIcons name="close" size={24} color="#1B1528" />
+              </TouchableOpacity>
+              <Text style={styles.reportTitle}>Report {user?.name}</Text>
+              <Text style={styles.reportDescription}>
+                Let us know when someone's broken our guidelines. They won't know that you've reported them, or why.
+              </Text>
+
+              <View style={styles.reportStepsContainer}>
+                <View style={styles.reportStep}>
+                  <View style={styles.reportStepNumber}>
+                    <Text style={styles.reportStepNumberText}>1</Text>
+                  </View>
+                  <Text style={styles.reportStepText}>Let us know what happened</Text>
+                </View>
+                <View style={styles.reportStep}>
+                  <View style={styles.reportStepNumber}>
+                    <Text style={styles.reportStepNumberText}>2</Text>
+                  </View>
+                  <Text style={styles.reportStepText}>We'll investigate your report</Text>
+                </View>
+                <View style={styles.reportStep}>
+                  <View style={styles.reportStepNumber}>
+                    <Text style={styles.reportStepNumberText}>3</Text>
+                  </View>
+                  <Text style={styles.reportStepText}>We'll keep you updated</Text>
+                </View>
+              </View>
+
+              <View style={styles.unmatchSuggestion}>
+                <MaterialIcons name="close" size={16} color="#6B7280" />
+                <Text style={styles.unmatchSuggestionText}>
+                  Don't think they've broken our guidelines? Unmatch instead
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={styles.reportStartButton}
+                onPress={() => {
+                  setShowReportModal(false);
+                  setShowReportCategoryModal(true);
+                }}
+                activeOpacity={0.8}>
+                <Text style={styles.reportStartButtonText}>Start report</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.reportUnmatchButton}
+                onPress={() => {
+                  setShowReportModal(false);
+                  setShowUnmatchModal(true);
+                }}
+                activeOpacity={0.8}>
+                <Text style={styles.reportUnmatchButtonText}>Unmatch instead</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Report Category Modal - Second Screen */}
+        <Modal
+          visible={showReportCategoryModal}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setShowReportCategoryModal(false)}>
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowReportCategoryModal(false)}>
+            <View style={styles.reportCategoryModal}>
+              <TouchableOpacity
+                style={styles.modalBackButton}
+                onPress={() => {
+                  setShowReportCategoryModal(false);
+                  setShowReportModal(true);
+                }}
+                activeOpacity={0.7}>
+                <MaterialIcons name="arrow-back" size={24} color="#1B1528" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.modalCloseButton}
+                onPress={() => setShowReportCategoryModal(false)}
+                activeOpacity={0.7}>
+                <MaterialIcons name="close" size={24} color="#1B1528" />
+              </TouchableOpacity>
+              <Text style={styles.reportCategoryTitle}>What do you want to report?</Text>
+              <Text style={styles.reportCategorySubtitle}>
+                We'll keep this private, and they won't know you've reported them. This helps us keep AstroDate safe.
+              </Text>
+
+              <View style={styles.reportCategoryList}>
+                {[
+                  "Something on their profile",
+                  "Behavior on AstroDate",
+                  "They shouldn't be on AstroDate"
+                ].map((category, index) => (
+                  <TouchableOpacity
+                    key={index}
+                    style={styles.reportCategoryOption}
+                    onPress={() => {
+                      setSelectedReportCategory(category);
+                      setShowReportCategoryModal(false);
+                      setShowReportSubcategoryModal(true);
+                    }}
+                    activeOpacity={0.7}>
+                    <Text style={styles.reportCategoryOptionText}>{category}</Text>
+                    <MaterialIcons name="chevron-right" size={24} color="#6B7280" />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Report Subcategory Modal - Third Screen */}
+        <Modal
+          visible={showReportSubcategoryModal}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setShowReportSubcategoryModal(false)}>
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowReportSubcategoryModal(false)}>
+            <View style={styles.reportSubcategoryModal}>
+              <TouchableOpacity
+                style={styles.modalBackButton}
+                onPress={() => {
+                  setShowReportSubcategoryModal(false);
+                  setShowReportCategoryModal(true);
+                }}
+                activeOpacity={0.7}>
+                <MaterialIcons name="arrow-back" size={24} color="#1B1528" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.modalCloseButton}
+                onPress={() => setShowReportSubcategoryModal(false)}
+                activeOpacity={0.7}>
+                <MaterialIcons name="close" size={24} color="#1B1528" />
+              </TouchableOpacity>
+              <Text style={styles.reportSubcategoryTitle}>{selectedReportCategory}</Text>
+
+              <View style={styles.reportSubcategoryList}>
+                {getSubcategoriesForCategory(selectedReportCategory).map((subcategory, index) => (
+                  <TouchableOpacity
+                    key={index}
+                    style={styles.reportSubcategoryOption}
+                    onPress={async () => {
+                      setSelectedReportSubcategory(subcategory);
+                      setShowReportSubcategoryModal(false);
+                      // Show describe page logic:
+                      // - "Something on their profile": Always show describe page for all subcategories
+                      // - "Behavior on AstroDate": Only show describe page for "Other" subcategory
+                      // - "They shouldn't be on AstroDate": Only show describe page for "Other" subcategory
+                      if (selectedReportCategory === "Something on their profile") {
+                        // Always show describe page for "Something on their profile"
+                        setShowReportDetailsModal(true);
+                      } else if (selectedReportCategory === "Behavior on AstroDate") {
+                        // Only show describe page if "Other" is selected
+                        if (subcategory === "Other") {
+                          setShowReportDetailsModal(true);
+                        } else {
+                          // For other subcategories, save report and go directly to confirmation
+                          if (chatId && !reportSaved) {
+                            const reportResult = await createReport(chatId, selectedReportCategory, subcategory, undefined, channelId);
+                            if (reportResult.success) {
+                              setReportSaved(true);
+                            } else {
+                              console.error('❌ Failed to save report:', reportResult.error);
+                              showAlert('Error', 'Failed to save report. Please try again.');
+                              return;
+                            }
+                          }
+                          setTimeout(() => {
+                            setShowReportConfirmationModal(true);
+                          }, 300);
+                        }
+                      } else if (selectedReportCategory === "They shouldn't be on AstroDate") {
+                        // Only show describe page if "Other" is selected
+                        if (subcategory === "Other") {
+                          setShowReportDetailsModal(true);
+                        } else {
+                          // For other subcategories, save report and go directly to confirmation
+                          if (chatId && !reportSaved) {
+                            const reportResult = await createReport(chatId, selectedReportCategory, subcategory, undefined, channelId);
+                            if (reportResult.success) {
+                              setReportSaved(true);
+                            } else {
+                              console.error('❌ Failed to save report:', reportResult.error);
+                              showAlert('Error', 'Failed to save report. Please try again.');
+                              return;
+                            }
+                          }
+                          setTimeout(() => {
+                            setShowReportConfirmationModal(true);
+                          }, 300);
+                        }
+                      }
+                    }}
+                    activeOpacity={0.7}>
+                    <Text style={styles.reportSubcategoryOptionText}>{subcategory}</Text>
+                    <MaterialIcons name="chevron-right" size={24} color="#6B7280" />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Report Details Modal - Fourth Screen (Intermediate) */}
+        <Modal
+          visible={showReportDetailsModal}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setShowReportDetailsModal(false)}>
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowReportDetailsModal(false)}>
+            <View style={styles.reportDetailsModal}>
+              <TouchableOpacity
+                style={styles.modalBackButton}
+                onPress={() => {
+                  setShowReportDetailsModal(false);
+                  setShowReportSubcategoryModal(true);
+                }}
+                activeOpacity={0.7}>
+                <MaterialIcons name="arrow-back" size={24} color="#1B1528" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.modalCloseButton}
+                onPress={() => setShowReportDetailsModal(false)}
+                activeOpacity={0.7}>
+                <MaterialIcons name="close" size={24} color="#1B1528" />
+              </TouchableOpacity>
+              <Text style={styles.reportDetailsTitle}>
+                Tell us more about {selectedReportSubcategory}
+              </Text>
+              <Text style={styles.reportDetailsSubtitle}>
+                Please provide additional details to help us investigate your report.
+              </Text>
+              <TextInput
+                style={styles.reportDetailsInput}
+                placeholder="Describe what happened..."
+                placeholderTextColor="#9CA3AF"
+                multiline
+                numberOfLines={6}
+                textAlignVertical="top"
+                value={reportDetails}
+                onChangeText={setReportDetails}
+              />
+              <TouchableOpacity
+                style={styles.reportSubmitButton}
+                onPress={async () => {
+                  // Save report to database
+                  if (chatId && selectedReportCategory && selectedReportSubcategory && !reportSaved) {
+                    const reportResult = await createReport(
+                      chatId,
+                      selectedReportCategory,
+                      selectedReportSubcategory,
+                      reportDetails,
+                      channelId
+                    );
+                    if (reportResult.success) {
+                      setReportSaved(true);
+                    } else {
+                      console.error('❌ Failed to save report:', reportResult.error);
+                      showAlert('Error', 'Failed to save report. Please try again.');
+                      return;
+                    }
+                  }
+                  setShowReportDetailsModal(false);
+                  setTimeout(() => {
+                    setShowReportConfirmationModal(true);
+                  }, 300);
+                }}
+                activeOpacity={0.8}>
+                <Text style={styles.reportSubmitButtonText}>Submit Report</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Report Confirmation Modal - Fifth Screen (Final) */}
+        <Modal
+          visible={showReportConfirmationModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowReportConfirmationModal(false)}>
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowReportConfirmationModal(false)}>
+            <View style={styles.reportConfirmationModal}>
+              <TouchableOpacity
+                style={styles.modalCloseButton}
+                onPress={() => setShowReportConfirmationModal(false)}
+                activeOpacity={0.7}>
+                <MaterialIcons name="close" size={24} color="#1B1528" />
+              </TouchableOpacity>
+              <View style={styles.reportCheckmark}>
+                <MaterialIcons name="check-circle" size={64} color="#10B981" />
+              </View>
+              <Text style={styles.reportConfirmationTitle}>
+                You've blocked and reported {user?.name}
+              </Text>
+              <Text style={styles.reportConfirmationSubtitle}>
+                Thanks for helping protect the AstroDate community. You'll receive updates on your report in the Help Hub on your profile page.
+              </Text>
+              <TouchableOpacity
+                style={styles.reportDoneButton}
+                onPress={async () => {
+                  setShowReportConfirmationModal(false);
+                  // Report should already be saved at this point
+                  // If for some reason it wasn't saved, try one more time
+                  if (!reportSaved && chatId && selectedReportCategory && selectedReportSubcategory) {
+                    const reportResult = await createReport(
+                      chatId,
+                      selectedReportCategory,
+                      selectedReportSubcategory,
+                      reportDetails || undefined,
+                      channelId
+                    );
+                    if (reportResult.success) {
+                      setReportSaved(true);
+                      // Wait a moment for the report to be saved, then navigate
+                      await new Promise(resolve => setTimeout(resolve, 300));
+                    } else {
+                      console.error('❌ Failed to save report (fallback):', reportResult.error);
+                      showAlert('Error', 'Failed to save report. Please try again.');
+                      return;
+                    }
+                  } else if (reportSaved) {
+                    // Wait a moment to ensure backend has processed the report
+                    await new Promise(resolve => setTimeout(resolve, 200));
+                  }
+                  // Only remove from frontend, keep in backend for review
+                  // Chat will be immediately removed from frontend (chats and matches)
+                  // Messages will remain in backend and NOT be deleted after 5 minutes
+                  await handleReport();
+                }}
+                activeOpacity={0.8}>
+                <Text style={styles.reportDoneButtonText}>Done</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+      </SafeAreaView>
     </ErrorBoundary>
   );
 }

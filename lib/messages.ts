@@ -78,12 +78,6 @@ export const sendMessage = async (
         error: error.message,
       };
     }
-
-    console.log('✅ Message stored in Supabase:', {
-      id: data?.id,
-      created_at: data?.created_at,
-      message_text: data?.message_text,
-    });
     drainPendingPushNotifications().catch(() => { });
 
     return {

@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
+import type { Notification, NotificationResponse } from 'expo-notifications/build/Notifications.types';
 import { router } from 'expo-router';
 import { AppState, Platform } from 'react-native';
 import { supabase } from './supabase';
@@ -120,17 +121,17 @@ export async function drainPendingPushNotifications(): Promise<void> {
 }
 
 export function setupNotificationListeners(): () => void {
-  const receivedSubscription = Notifications.addNotificationReceivedListener((notification) => {
+  const receivedSubscription = Notifications.addNotificationReceivedListener((notification: Notification) => {
     console.log('[notifications] foreground notification received:', notification.request.identifier);
   });
 
-  const responseSubscription = Notifications.addNotificationResponseReceivedListener((response) => {
+  const responseSubscription = Notifications.addNotificationResponseReceivedListener((response: NotificationResponse) => {
     const payload = response.notification.request.content.data as NotificationPayload;
     openNotificationDestination(payload);
   });
 
   Notifications.getLastNotificationResponseAsync()
-    .then((response) => {
+    .then((response: NotificationResponse | null) => {
       if (!response) return;
       const payload = response.notification.request.content.data as NotificationPayload;
       openNotificationDestination(payload);

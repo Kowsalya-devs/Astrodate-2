@@ -1,8 +1,8 @@
 import { getLastMessagesBatch, getUnreadCountsBatch } from '@/lib/messages';
+import { releaseRealtimeChannel, releaseRealtimeChannelsByTopicPrefix, trackRealtimeChannel } from '@/lib/realtime-channels';
 import { getReportedUserIds } from '@/lib/reports';
 import { supabase } from '@/lib/supabase';
 import { cleanupTypingSubscriptions, subscribeToMultipleTypingChannels } from '@/lib/typing-status';
-import { releaseRealtimeChannel, releaseRealtimeChannelsByTopicPrefix, trackRealtimeChannel } from '@/lib/realtime-channels';
 import { getAllUsers } from '@/lib/users';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -140,9 +140,9 @@ function ChatItemComponent({
       activeOpacity={0.7}
       onPress={() => {
         router.push({
-          pathname: '/chat/[id]/index' as any,
+          pathname: '/chat/[id]',
           params: { id: chat.id },
-        } as any);
+        });
       }}
       onLongPress={(event) => onLongPress(chat, event)}>
       <View style={styles.avatarContainer}>
@@ -759,7 +759,10 @@ export default function ChatsScreen() {
       }
     });
 
+    let lastAppState = AppState.currentState;
     const appStateSub = AppState.addEventListener('change', (state) => {
+      if (state === lastAppState) return;
+      lastAppState = state;
       if (state === 'active') {
         void fetchUsers();
       }

@@ -86,6 +86,8 @@ export default function RootLayout() {
       const currentRoute = routeFromSegments();
       if (navigationInFlightRef.current || lastRouteRef.current === nextRoute || currentRoute === nextRoute) return;
 
+      console.log('[Nav] redirect', nextRoute);
+
       navigationInFlightRef.current = true;
       lastRouteRef.current = nextRoute;
       router.replace(route);
@@ -172,6 +174,7 @@ export default function RootLayout() {
 
     // Only handle SIGNED_OUT — SIGNED_IN intentionally ignored (see BUG 3 above)
     const { data: authSub } = supabase.auth.onAuthStateChange((event) => {
+      console.log('[Auth] state change', event);
       if (event === 'SIGNED_OUT' && isMountedRef.current) {
         resetGlobalTypingChannel().catch(console.error);
         releaseAllOwnedRealtimeChannels(supabase);
@@ -290,6 +293,7 @@ export default function RootLayout() {
       // FIX BUG 4: deduplicate AppState events (Android fires 'active' repeatedly)
       if (nextAppState === lastAppState) return;
       lastAppState = nextAppState;
+      console.log('[Lifecycle] app state', nextAppState);
 
       try {
         const { data } = await supabase.auth.getUser();

@@ -28,6 +28,16 @@ export function releaseRealtimeChannelsByTopicPrefix(client: any, topicPrefix: s
   }
 }
 
+export function safeReleaseExistingChannel(client: any, exactTopic: string) {
+  const channels: any[] = client.getChannels();
+  for (const channel of channels) {
+    if (channel?.topic === exactTopic) {
+      console.log('[Realtime] safeReleaseExistingChannel removing duplicate:', exactTopic);
+      releaseRealtimeChannel(client, channel);
+    }
+  }
+}
+
 export function releaseAllOwnedRealtimeChannels(client: any) {
   for (const channel of Array.from(ownedChannels)) {
     releaseRealtimeChannel(client, channel);
