@@ -1,16 +1,13 @@
-import { getAstroDetails } from '@/lib/astro-details';
 import { fetchFinalMatches } from '@/lib/matching';
-import { supabase } from '@/lib/supabase';
-import { getUserPhotos } from '@/lib/user-photos';
-import { getUserProfile } from '@/lib/user-profile';
 import { getMembershipOrFree } from '@/lib/subscription';
+import { supabase } from '@/lib/supabase';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import LottieView from 'lottie-react-native';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -134,7 +131,7 @@ export default function LikesScreen() {
     getMembershipOrFree().then((m) => {
       const features = m.features as any;
       if (mounted) setCanSeeWhoLikedMe(!!features?.see_who_liked_me && m.is_active);
-    }).catch(() => {});
+    }).catch(() => { });
 
     // Helper: calculate age from ISO birth_date string
     const calcAge = (birthDate: string): number | undefined => {
@@ -265,7 +262,7 @@ export default function LikesScreen() {
           ...latestSentMap.keys(),
         ]));
 
-        const profileData = await batchFetchProfiles(allUserIds, matchesResult);
+        const profileData = await batchFetchProfiles(allUserIds, matchesResult.data);
 
         // Map likes received
         const likesProfiles = Array.from(latestLikeMap.entries())
@@ -354,7 +351,7 @@ export default function LikesScreen() {
 
         // Use batch fetch instead of N+1 per-user calls
         const sentUserIds = Array.from(latestSentByUser.keys());
-        const profileData = await batchFetchProfilesForRefresh(sentUserIds, matchesResult);
+        const profileData = await batchFetchProfilesForRefresh(sentUserIds, matchesResult.data);
 
         const sentProfiles = Array.from(latestSentByUser.entries())
           .map(([userId, sentMeta]) => {

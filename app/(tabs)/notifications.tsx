@@ -234,8 +234,9 @@ export default function NotificationsScreen() {
   const handlePress = (item: NotificationItem) => {
     setReadIds(prev => new Set([...prev, item.id]));
     const senderId = item.payload?.sender_id;
-    if ((item.type === 'new_match' || item.type === 'new_message') && senderId) {
-      router.push({ pathname: '/chat/[id]', params: { id: senderId } });
+    const chatId = item.payload?.chat_id;
+    if ((item.type === 'new_match' || item.type === 'new_message') && (chatId || senderId)) {
+      router.push({ pathname: '/chat/[id]', params: { id: (chatId || senderId) as string } });
     } else if ((item.type === 'new_like' || item.type === 'new_superlike') && senderId) {
       router.push({ pathname: '/profile-details', params: { userId: senderId } });
     }
@@ -344,7 +345,16 @@ export default function NotificationsScreen() {
           </View>
           {unreadCount > 0 && (
             <TouchableOpacity
-              onPress={() => setReadIds(new Set(notifications.map(n => n.id)))}
+              onPress={async () => {
+                setReadIds(new Set(notifications.map(n => n.id)));
+                const { data: { user } } = await supabase.auth.getUser();
+                if (user) {
+                  await (supabase.from('push_notifications' as any) as any)
+                    .update({ status: 'read' })
+                    .eq('user_id', user.id)
+                    .eq('status', 'delivered');
+                }
+              }}
               style={styles.markAllBtn}
             >
               <Text style={styles.markAllText}>Mark all read</Text>

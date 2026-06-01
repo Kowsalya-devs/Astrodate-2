@@ -3,17 +3,17 @@ import { useNavigation, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  FlatList,
   Image,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
-  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
-  View,
+  View
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getWelcomeMessage, sendMessageToGemini, type ChatMessage } from '../lib/gemini-chatbot';
@@ -40,7 +40,7 @@ export default function ChatbotScreen() {
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
-  const scrollViewRef = useRef<ScrollView>(null);
+  const flatListRef = useRef<FlatList>(null);
 
   useEffect(() => {
     navigation.setOptions({
@@ -51,7 +51,7 @@ export default function ChatbotScreen() {
   useEffect(() => {
     if (messages.length > 0) {
       setTimeout(() => {
-        scrollViewRef.current?.scrollToEnd({ animated: false });
+        flatListRef.current?.scrollToEnd({ animated: false });
       }, 50);
     }
   }, [messages]);
@@ -60,13 +60,13 @@ export default function ChatbotScreen() {
     const showSubscription = Keyboard.addListener('keyboardDidShow', (e) => {
       setKeyboardHeight(e.endCoordinates.height);
       setTimeout(() => {
-        scrollViewRef.current?.scrollToEnd({ animated: true });
+        flatListRef.current?.scrollToEnd({ animated: true });
       }, 100);
     });
     const hideSubscription = Keyboard.addListener('keyboardDidHide', () => {
       setKeyboardHeight(0);
       setTimeout(() => {
-        scrollViewRef.current?.scrollToEnd({ animated: true });
+        flatListRef.current?.scrollToEnd({ animated: true });
       }, 100);
     });
     return () => {
@@ -176,66 +176,74 @@ export default function ChatbotScreen() {
           </View>
 
           {/* Messages */}
-          <ScrollView
-            ref={scrollViewRef}
-            style={styles.messagesContainer}
-            contentContainerStyle={styles.messagesContent}
-            showsVerticalScrollIndicator={false}
-            keyboardDismissMode="interactive"
-            keyboardShouldPersistTaps="handled">
-            {messages.map((message, index) => (
+          <FlatList
+            ref={flatListRef}
+            data={messages}
+            keyExtractor={(_, i) => String(i)}
+            renderItem={({ item }) => (
               <View
-                key={index}
                 style={[
                   styles.messageWrapper,
-                  message.role === 'user' ? styles.userMessageWrapper : styles.assistantMessageWrapper,
+                  item.role === 'user' ? styles.userMessageWrapper : styles.assistantMessageWrapper,
                 ]}>
-                {message.role === 'assistant' && (
+                {item.role === 'assistant' && (
                   <View style={styles.assistantAvatar}>
-                    <Image source={require('../assets/images/icon.png')} style={{width: 32, height: 32, borderRadius: 16}} />
+                    <Image source={require('../assets/images/icon.png')} style={{ width: 32, height: 32, borderRadius: 16 }} />
                   </View>
                 )}
                 <View
                   style={[
                     styles.messageBubble,
-                    message.role === 'user' ? styles.userMessage : styles.assistantMessage,
+                    item.role === 'user' ? styles.userMessage : styles.assistantMessage,
                   ]}>
                   <Text
                     style={[
                       styles.messageText,
-                      message.role === 'user' ? styles.userMessageText : styles.assistantMessageText,
+                      item.role === 'user' ? styles.userMessageText : styles.assistantMessageText,
                     ]}>
-                    {message.content}
+                    {item.content}
                   </Text>
-                  {message.timestamp && (
+                  {item.timestamp && (
                     <Text
                       style={[
                         styles.messageTime,
-                        message.role === 'user' ? styles.userMessageTime : styles.assistantMessageTime,
+                        item.role === 'user' ? styles.userMessageTime : styles.assistantMessageTime,
                       ]}>
-                      {formatTime(message.timestamp)}
+                      {formatTime(item.timestamp)}
                     </Text>
                   )}
                 </View>
-                {message.role === 'user' && (
+                {item.role === 'user' && (
                   <View style={styles.userAvatar}>
                     <Ionicons name="person" size={18} color="#FFFFFF" />
                   </View>
                 )}
               </View>
-            ))}
-            {isLoading && (
-              <View style={styles.loadingWrapper}>
-                <View style={styles.assistantAvatar}>
-                  <Image source={require('../assets/images/icon.png')} style={{width: 32, height: 32, borderRadius: 16}} />
-                </View>
-                <View style={[styles.messageBubble, styles.assistantMessage, styles.loadingBubble]}>
-                  <ActivityIndicator size="small" color="#6B46C1" />
-                  <Text style={styles.loadingText}>Consulting the stars...</Text>
-                </View>
-              </View>
             )}
-          </ScrollView>
+            ListFooterComponent={
+              isLoading ? (
+                <View style={styles.loadingWrapper}>
+                  <View style={styles.assistantAvatar}>
+                    <Image source={require('../assets/images/icon.png')} style={{ width: 32, height: 32, borderRadius: 16 }} />
+                  </View>
+                  <View style={[styles.messageBubble, styles.assistantMessage, styles.loadingBubble]}>
+                    <ActivityIndicator size="small" color="#6B46C1" />
+                    <Text style={styles.loadingText}>Consulting the stars...</Text>
+                  </View>
+                </View>
+              ) : null
+            }
+            onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+            style={styles.messagesContainer}
+            contentContainerStyle={styles.messagesContent}
+            showsVerticalScrollIndicator={false}
+            keyboardDismissMode="interactive"
+            keyboardShouldPersistTaps="handled"
+            initialNumToRender={15}
+            maxToRenderPerBatch={10}
+            windowSize={8}
+            removeClippedSubviews={Platform.OS === 'android'}
+          />
 
           {/* Input */}
           <View style={styles.inputContainer}>
@@ -268,7 +276,7 @@ export default function ChatbotScreen() {
 
         </View>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </SafeAreaView >
   );
 }
 

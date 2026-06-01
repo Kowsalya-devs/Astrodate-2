@@ -197,10 +197,10 @@ async function getStableDeviceId(): Promise<string> {
 function openNotificationDestination(payload: NotificationPayload): void {
   if (!payload) return;
 
-  if ((payload.type === 'message' || payload.type === 'match') && payload.sender_id) {
+  if ((payload.type === 'message' || payload.type === 'match') && (payload.chat_id || payload.sender_id)) {
     router.push({
       pathname: '/chat/[id]',
-      params: { id: payload.sender_id },
+      params: { id: (payload.chat_id || payload.sender_id) as string },
     });
   }
 }

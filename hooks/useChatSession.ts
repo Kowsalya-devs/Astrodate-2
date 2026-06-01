@@ -3,6 +3,8 @@ import { getMatch } from '@/lib/matches';
 import { getOnlineStatus } from '@/lib/online-status';
 import { getUserById } from '@/lib/users';
 import { useEffect, useState } from 'react';
+import { useSynastry } from '@/hooks/useSynastry';
+import { type SynastryDetail } from '@/lib/synastry';
 
 const getAvatarSource = (avatarUrl: string | null | undefined) => {
   if (avatarUrl) return { uri: avatarUrl };
@@ -11,6 +13,7 @@ const getAvatarSource = (avatarUrl: string | null | undefined) => {
 
 interface UseChatSessionProps {
   chatId: string;
+  currentUserId?: string | null;
   isMountedRef: React.RefObject<boolean>;
 }
 
@@ -21,14 +24,19 @@ interface UseChatSessionReturn {
   icebreaker: string | null;
   loading: boolean;
   setUser: React.Dispatch<React.SetStateAction<{ name: string; avatar: any; isOnline: boolean } | null>>;
+  synastryDetail?: SynastryDetail | null;
+  synastryScore?: number | null;
+  synastryLoading?: boolean;
 }
 
-export function useChatSession({ chatId, isMountedRef }: UseChatSessionProps): UseChatSessionReturn {
+export function useChatSession({ chatId, currentUserId, isMountedRef }: UseChatSessionProps): UseChatSessionReturn {
   const [user, setUser] = useState<{ name: string; avatar: any; isOnline: boolean } | null>(null);
   const [isMatched, setIsMatched] = useState<boolean | null>(null);
   const [channelId, setChannelId] = useState<string>('');
   const [icebreaker, setIcebreaker] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const { synastryDetail, derivedScore, isLoading: synastryLoading } = useSynastry(currentUserId || null, chatId || null);
 
   // Verify match and fetch user data and online status from backend
   useEffect(() => {
@@ -119,5 +127,8 @@ export function useChatSession({ chatId, isMountedRef }: UseChatSessionProps): U
     icebreaker,
     loading,
     setUser,
+    synastryDetail,
+    synastryScore: derivedScore,
+    synastryLoading,
   };
 }

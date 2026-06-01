@@ -41,8 +41,13 @@ export async function saveUserLike(
     }
 
     if (actionType === 'super_like') {
-      const { data: allowed } = await supabase
-        .rpc('check_super_like_quota', { p_user_id: userId });
+      const { data: allowed, error: rpcError } = await supabase
+        .rpc('check_super_like_quota' as any, { p_user_id: userId } as any);
+      
+      if (rpcError) {
+        throw new Error(rpcError.message || 'RPC check_super_like_quota failed');
+      }
+
       if (!allowed) {
         return { success: false, error: 'QUOTA_EXCEEDED' };
       }

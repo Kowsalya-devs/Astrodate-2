@@ -11,6 +11,7 @@ import { supabase } from '@/lib/supabase';
 import { resetGlobalTypingChannel } from '@/lib/typing-status';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import * as Linking from 'expo-linking';
+import * as Notifications from 'expo-notifications';
 import { Stack, useRouter, useSegments, type Href } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
@@ -196,8 +197,27 @@ export default function RootLayout() {
   }, []); // EMPTY DEPS — must never be changed
 
   useEffect(() => {
-    return setupNotificationListeners();
-  }, []);
+    const responseListener = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response.notification.request.content.data as any;
+      if (data?.type === 'new_message' && data?.chat_id) {
+        router.push({
+          pathname: '/chat/[id]',
+          params: { id: data.chat_id }
+        });
+      } else if (data?.type === 'new_match' && data?.chat_id) {
+        router.push({
+          pathname: '/chat/[id]',
+          params: { id: data.chat_id }
+        });
+      }
+    });
+
+    const cleanup = setupNotificationListeners();
+    return () => {
+      responseListener.remove();
+      if (typeof cleanup === 'function') cleanup();
+    };
+  }, [router]);
 
   // ─── DEEP LINK HANDLER ──────────────────────────────────────────────────────
   //

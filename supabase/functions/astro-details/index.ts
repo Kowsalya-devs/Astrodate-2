@@ -3,7 +3,7 @@
  * ASTROLOGY_API_USER_ID
  * ASTROLOGY_API_KEY
  */
-import "jsr:@supabase/functions-js/edge-runtime.d.ts"
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -34,7 +34,11 @@ Deno.serve(async (req) => {
     const apiKey = Deno.env.get('ASTROLOGY_API_KEY');
 
     if (!userId || !apiKey) {
-      return new Response(JSON.stringify({ error: "Missing Astrology API credentials" }), {
+      console.error('❌ MISSING ASTROLOGY API CREDENTIALS');
+      return new Response(JSON.stringify({
+        error: 'astro_api_not_configured',
+        message: 'Set ASTROLOGY_API_USER_ID and ASTROLOGY_API_KEY in Edge Function secrets'
+      }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
         status: 500,
       });
@@ -60,10 +64,10 @@ Deno.serve(async (req) => {
       ]);
 
       if (!planetsRes.ok || !nakshatraRes.ok) {
-        return new Response(JSON.stringify({ 
-          error: "Failed to fetch from Astrology API", 
-          status: { planets: planetsRes.status, nakshatra: nakshatraRes.status }, 
-          endpoint: mode 
+        return new Response(JSON.stringify({
+          error: "Failed to fetch from Astrology API",
+          status: { planets: planetsRes.status, nakshatra: nakshatraRes.status },
+          endpoint: mode
         }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
           status: 502,
@@ -120,20 +124,20 @@ Deno.serve(async (req) => {
     } else if (mode === 'full') {
       const { hour, min, lat, lon, tzone } = payload;
       const today = new Date();
-      const body = JSON.stringify({ 
-        day: today.getDate(), 
-        month: today.getMonth() + 1, 
-        year: today.getFullYear(), 
-        hour, min, lat, lon, tzone 
+      const body = JSON.stringify({
+        day: today.getDate(),
+        month: today.getMonth() + 1,
+        year: today.getFullYear(),
+        hour, min, lat, lon, tzone
       });
 
       const res = await fetch(`${BASE_URL}/daily_nakshatra_prediction`, { method: 'POST', headers: commonHeaders, body });
 
       if (!res.ok) {
-        return new Response(JSON.stringify({ 
-          error: "Failed to fetch daily prediction", 
-          status: res.status, 
-          endpoint: 'daily_nakshatra_prediction' 
+        return new Response(JSON.stringify({
+          error: "Failed to fetch daily prediction",
+          status: res.status,
+          endpoint: 'daily_nakshatra_prediction'
         }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
           status: 502,

@@ -1,12 +1,15 @@
 import { useTabBarVisibility } from '@/hooks/use-tab-bar-visibility';
+import { getMyDailyPick, type DailyPick } from '@/lib/daily-picks';
+import { getIcebreakerForMatch } from '@/lib/icebreaker';
 import { fetchFinalMatches, getDiscoveryPreferences, hasCompletedOnboarding, type DiscoveryPreferences, type FinalMatchResult } from '@/lib/matching';
-import { signalViewProfile, startViewLongTimer, stopViewLongTimer, signalLike, signalSuperLike, signalDislike } from '@/lib/signals';
 import { getSection1Responses } from '@/lib/onboarding-responses';
+import { trackRealtimeChannel } from '@/lib/realtime-channels';
 import { createReport, getReportedUserIds } from '@/lib/reports';
+import { signalDislike, signalLike, signalSuperLike, signalViewProfile, startViewLongTimer, stopViewLongTimer } from '@/lib/signals';
 import { supabase } from '@/lib/supabase';
+import { derivedAstroScore, getActiveAstroEvents, getSynastryDetail, type AstroEvent } from '@/lib/synastry';
 import { checkMutualLike, hasUserSuperlikedMe, saveUserLike } from '@/lib/user-likes';
 import { getUserPhotos } from '@/lib/user-photos';
-import { getMyDailyPick, type DailyPick } from '@/lib/daily-picks';
 import AntDesign from '@expo/vector-icons/AntDesign';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -21,7 +24,6 @@ import LottieView from 'lottie-react-native';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Dimensions,
   Modal,
   Platform,
@@ -53,12 +55,9 @@ import Animated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import { getActiveAstroEvents, getSynastryDetail, derivedAstroScore, type AstroEvent } from '@/lib/synastry';
-import { getIcebreakerForMatch } from '@/lib/icebreaker';
-import { trackRealtimeChannel } from '@/lib/realtime-channels';
-import { ErrorBoundary } from '@/components/error-boundary';
 import { useFeedViewport } from '../hooks/useFeedViewport';
 import { cleanupFeedChannel, removeFeedChannelsByTopicPrefix } from '../realtime/feedRealtimeManager';
+import { CosmicMatchCard } from './CosmicMatchCard';
 
 const { width: STATIC_WIDTH, height: STATIC_HEIGHT } = Dimensions.get('window');
 // Tab bar: 60 height + marginBottom (28 iOS / 20 Android)
@@ -421,7 +420,8 @@ export default function DiscoverScreen() {
   const [reportingProfile, setReportingProfile] = useState<Profile | null>(null);
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
   const [reportedUserIds, setReportedUserIds] = useState<Set<string>>(new Set());
-    // Astro Events banner
+  const [isFallbackFeed, setIsFallbackFeed] = useState(false);
+  // Astro Events banner
   const [activeAstroEvent, setActiveAstroEvent] = useState<AstroEvent | null>(null);
 
   // Match modal icebreaker (fetched from DB after match fires)
@@ -464,7 +464,7 @@ export default function DiscoverScreen() {
     (async () => {
       try {
         const photosResult = await getUserPhotos();
-        if (mounted && photosResult.success && photosResult.data) {          
+        if (mounted && photosResult.success && photosResult.data) {
           const primary = photosResult.data.find((p: any) => p.is_primary) || photosResult.data[0];
           if (primary?.photo_url && mounted) setCurrentUserPhoto({ uri: primary.photo_url });
         }
@@ -623,12 +623,15 @@ export default function DiscoverScreen() {
   const loadDiscoverProfiles = useCallback(async () => {
     try {
       setLoadingProfiles(true);
-      const [highQualityMatches, section1Response, discoveryPrefs, reportedResult] = await Promise.all([
+      const [highQualityMatchesResult, section1Response, discoveryPrefs, reportedResult] = await Promise.all([
         fetchFinalMatches(),
         getSection1Responses(),
         getDiscoveryPreferences(),
         getReportedUserIds(),
       ]);
+
+      const highQualityMatches = highQualityMatchesResult.data;
+      setIsFallbackFeed(highQualityMatchesResult.isFallback);
 
       const reportedSet = new Set<string>((reportedResult.success ? reportedResult.data : []) || []);
       setReportedUserIds(reportedSet);
@@ -668,7 +671,7 @@ export default function DiscoverScreen() {
         setProfiles([]);
       }
 
-      getMyDailyPick().then(setDailyPick).catch(() => {});
+      getMyDailyPick().then(setDailyPick).catch(() => { });
     } catch (e) {
       console.error('Failed to load matches:', e);
       setProfiles([]);
@@ -758,7 +761,7 @@ export default function DiscoverScreen() {
             // Fetch this user's match data and add to list
             try {
               const results = await fetchFinalMatches();
-              const newUserMatch = results.find((m: any) => m.match_user_id === newPhotoUserId);
+              const newUserMatch = results.data.find((m: any) => m.match_user_id === newPhotoUserId);
 
               if (newUserMatch && mounted) {
                 if (!candidateMatchesInterest(newUserMatch, currentUserInterest)) {
@@ -852,7 +855,7 @@ export default function DiscoverScreen() {
           // AstroScore ring
           getSynastryDetail(currentUserId, likedUserId).then(({ data }) => {
             if (data) setMatchAstroScore(derivedAstroScore(data));
-          }).catch(() => {});
+          }).catch(() => { });
         }
 
         // Icebreaker — wait a beat so the background write has a head start
@@ -1684,7 +1687,7 @@ export default function DiscoverScreen() {
         <LinearGradient
           colors={[
             activeAstroEvent.ui_config?.gradient_start ?? '#1a1a2e',
-            activeAstroEvent.ui_config?.gradient_end   ?? '#e94560',
+            activeAstroEvent.ui_config?.gradient_end ?? '#e94560',
           ]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 0 }}
@@ -1714,6 +1717,39 @@ export default function DiscoverScreen() {
             <MaterialIcons name="close" size={16} color={activeAstroEvent.ui_config?.text_color ?? '#fff'} />
           </TouchableOpacity>
         </LinearGradient>
+      )}
+      {/* ── Cosmic Match of the Day ─────────────────────────────────────── */}
+      {dailyPick && (
+        <CosmicMatchCard
+          pick={dailyPick}
+          onPress={() => router.push({
+            pathname: '/profile-details',
+            params: { userId: dailyPick.picked_user_id }
+          })}
+        />
+      )}
+      {/* ── Fallback Feed Banner ─────────────────────────────────────────── */}
+      {isFallbackFeed && (
+        <View style={{
+          marginHorizontal: 16,
+          marginTop: 8,
+          borderRadius: 12,
+          padding: 12,
+          backgroundColor: 'rgba(255, 193, 7, 0.15)',
+          borderWidth: 1,
+          borderColor: 'rgba(255, 193, 7, 0.3)',
+          flexDirection: 'row',
+          alignItems: 'center',
+        }}>
+          <Text style={{ fontSize: 16, marginRight: 8 }}>
+            ⚡
+          </Text>
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: '#FFC107', fontWeight: '600', fontSize: 13 }}>
+              Showing nearby profiles — your cosmic feed is loading
+            </Text>
+          </View>
+        </View>
       )}
       {/* Profiles Stack (Behind everything) */}
       {loadingProfiles && profiles.length === 0 ? (
@@ -1844,16 +1880,16 @@ export default function DiscoverScreen() {
             </View>
 
             <TouchableOpacity
-                style={styles.matchBackButton}
-                onPress={() => {
-                  setShowMatchModal(false);
-                  setMatchedProfile(null);
-                  setMatchedUserId(null);
-                  setMatchIcebreaker(null);
-                  setMatchAstroScore(null);
-                  setMatchId(null);
-                }}
-              >
+              style={styles.matchBackButton}
+              onPress={() => {
+                setShowMatchModal(false);
+                setMatchedProfile(null);
+                setMatchedUserId(null);
+                setMatchIcebreaker(null);
+                setMatchAstroScore(null);
+                setMatchId(null);
+              }}
+            >
               <MaterialIcons name="close" size={24} color="#FFFFFF" />
             </TouchableOpacity>
 
@@ -2097,7 +2133,7 @@ export default function DiscoverScreen() {
             <Text style={styles.upgradeSheetMessage}>
               You've used all your Shooting Stars. Upgrade to Stellar or Cosmic for more.
             </Text>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.upgradeButton}
               onPress={() => {
                 setShowUpgradeSheet(false);
@@ -2106,7 +2142,7 @@ export default function DiscoverScreen() {
             >
               <Text style={styles.upgradeButtonText}>View Plans</Text>
             </TouchableOpacity>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.cancelButton}
               onPress={() => setShowUpgradeSheet(false)}
             >

@@ -207,7 +207,11 @@ serve(async (req) => {
             ...log.payload,
             notification_log_id: log.id,
             notification_type: log.notification_type,
+            type: log.notification_type,
             reference_id: log.reference_id,
+            chat_id: (log.payload as any)?.chat_id ?? (log.notification_type === 'new_message' ? log.reference_id : null),
+            sender_id: (log.payload as any)?.sender_id ?? null,
+            match_id: (log.payload as any)?.match_id ?? (log.notification_type === 'new_match' ? log.reference_id : null),
           },
         });
         mappings.push({ logId: log.id, token: token.expo_push_token });

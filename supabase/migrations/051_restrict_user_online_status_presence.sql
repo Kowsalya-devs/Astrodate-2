@@ -1,18 +1,7 @@
--- Migration 051: Harden user_online_status privacy and add safe presence RPCs
 BEGIN;
 
--- Remove the unsafe broad SELECT policy
-DO $$
-BEGIN
-  IF EXISTS (
-    SELECT 1 FROM pg_policies p
-    WHERE p.schemaname = 'public'
-      AND p.tablename = 'user_online_status'
-      AND p.policyname = 'Anyone can read online status'
-  ) THEN
-    EXECUTE 'ALTER TABLE public.user_online_status DROP POLICY "Anyone can read online status"';
-  END IF;
-END$$;
+-- Drop the unsafe broad SELECT policy
+DROP POLICY IF EXISTS "Anyone can read online status" ON public.user_online_status;
 
 -- Restrict SELECT to self or matched/active chat relationships only
 CREATE POLICY "Users can read own or matched online status"
@@ -36,7 +25,6 @@ CREATE POLICY "Users can read own or matched online status"
     )
   );
 
--- Create a secure RPC to fetch another user's presence if a match or message relationship exists
 CREATE OR REPLACE FUNCTION public.get_user_presence(p_target_user_id UUID)
 RETURNS TABLE(user_id UUID, is_online BOOLEAN, last_seen TIMESTAMPTZ)
 LANGUAGE plpgsql SECURITY DEFINER AS $$

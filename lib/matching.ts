@@ -1,9 +1,8 @@
-import { getAstroDetails } from './astro-details';
 import { getStandouts } from '@/lib/daily-picks';
-import { invokeSupabaseFunctionWithTimeout } from './network';
+import { getAstroDetails } from './astro-details';
+import type { Tables } from './database.types';
 import { supabase } from './supabase';
 import { getUserPhotos } from './user-photos';
-import type { Tables } from './database.types';
 
 export interface FinalMatchResult {
   match_user_id: string;
@@ -81,7 +80,7 @@ export async function hasCompletedOnboarding(userId: string): Promise<boolean> {
   }
 }
 
-export async function fetchFinalMatches(userIdOverride?: string) {
+export async function fetchFinalMatches(userIdOverride?: string): Promise<{ data: FinalMatchResult[]; isFallback: boolean }> {
   try {
     const { data: sessionData } = await supabase.auth.getSession();
 
@@ -90,7 +89,7 @@ export async function fetchFinalMatches(userIdOverride?: string) {
 
     if (!userId) {
       console.log('❌ No user session found');
-      return [] as FinalMatchResult[];
+      return { data: [], isFallback: true };
     }
 
     // Verify user has astro details before calling RPC
@@ -102,20 +101,34 @@ export async function fetchFinalMatches(userIdOverride?: string) {
     const { data, error } = await supabase.rpc('get_final_matches', {
       input_user_id: userId,
     });
-    
+
     if (error || !data || data.length === 0) {
       if (error) console.log('❌ RPC ERROR (get_final_matches):', error.message, error);
-      
+
       const { data: fallbackData } = await supabase.rpc('get_fallback_feed', {
         input_user_id: userId,
       });
-      return fallbackData ?? [];
+      // Normalize null → undefined to satisfy FinalMatchResult type
+      const normalizedFallback: FinalMatchResult[] = (fallbackData ?? []).map((u: any) => ({
+        ...u,
+        personality_vector: u.personality_vector ?? undefined,
+        indian_recommendation: u.indian_recommendation ?? undefined,
+        western_report: u.western_report ?? undefined,
+      }));
+      return { data: normalizedFallback, isFallback: true };
     }
 
-    return data;
+    // Normalize null → undefined to satisfy FinalMatchResult type
+    const normalizedData: FinalMatchResult[] = data.map((u: any) => ({
+      ...u,
+      personality_vector: u.personality_vector ?? undefined,
+      indian_recommendation: u.indian_recommendation ?? undefined,
+      western_report: u.western_report ?? undefined,
+    }));
+    return { data: normalizedData, isFallback: false };
   } catch (error) {
     console.error('❌ Unexpected error fetching final matches:', error);
-    return [] as FinalMatchResult[];
+    return { data: [], isFallback: true };
   }
 }
 
@@ -164,3 +177,4 @@ export async function getDiscoveryPreferences(): Promise<DiscoveryPreferences | 
 }
 
 export { getStandouts };
+

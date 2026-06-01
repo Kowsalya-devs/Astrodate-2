@@ -83,7 +83,9 @@ export default function ChatDetailScreen() {
     icebreaker,
     loading,
     setUser,
-  } = useChatSession({ chatId, isMountedRef });
+    synastryDetail,
+    synastryScore,
+  } = useChatSession({ chatId, currentUserId, isMountedRef });
 
   // ── useTypingStatus owns: isOtherUserTyping, handleTyping ──
   const { isOtherUserTyping, handleTyping } = useTypingStatus({ currentUserId, chatId, channelId });
@@ -865,6 +867,8 @@ export default function ChatDetailScreen() {
           connectionStatus={connectionStatus}
           onBackPress={handleBackPress}
           onMenuPress={handleOpenMenu}
+          synastryDetail={synastryDetail}
+          synastryScore={synastryScore}
         />
 
         {/* Messages + Input */}
