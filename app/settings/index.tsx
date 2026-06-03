@@ -328,9 +328,16 @@ export default function SettingsScreen() {
               Your privacy is extremely important to us.{'\n\n'}
               Data Collection: We collect necessary information for matching (astrological data, preferences).{'\n\n'}
               Data Protection: Your data is encrypted and securely stored.{'\n\n'}
-              Third Parties: We do not sell your personal data to non-affiliated third parties.{'\n\n'}
-              You may request an account deletion at any time to erase your history.
+              Third Parties: We do not sell your personal data to non-affiliated third parties.
             </Text>
+            <TouchableOpacity 
+              style={{ marginTop: 24, padding: 16, backgroundColor: 'rgba(248,113,113,0.1)', borderRadius: 12, flexDirection: 'row', alignItems: 'center' }}
+              onPress={() => { setActiveModal(null); router.push('/settings/delete-account'); }}
+              activeOpacity={0.7}
+            >
+              <MaterialIcons name="delete-forever" size={24} color="#F87171" style={{ marginRight: 12 }} />
+              <Text style={{ color: '#F87171', fontSize: 16, fontWeight: '600' }}>Request Account Deletion</Text>
+            </TouchableOpacity>
           </View>
         );
       case 'about':

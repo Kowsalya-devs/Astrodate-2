@@ -18,7 +18,7 @@ interface MessageBubbleProps {
 
 function MessageBubbleComponent({ message, currentUserId, avatar }: MessageBubbleProps) {
   const isMyMessage = message.senderId === currentUserId;
-  console.log('[Chat] render MessageBubble', message.id);
+  // console.log('[Chat] render MessageBubble', message.id);
 
   return (
     <View style={[styles.messageContainer, isMyMessage ? styles.myMessageContainer : styles.theirMessageContainer]}>
@@ -48,7 +48,6 @@ export const MessageBubble = memo(MessageBubbleComponent, (prevProps, nextProps)
 const styles = StyleSheet.create({
   messageContainer: {
     flexDirection: 'row',
-    marginBottom: 16,
     alignItems: 'flex-end',
   },
   myMessageContainer: {

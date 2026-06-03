@@ -358,10 +358,17 @@ export default function ChatsScreen() {
           return true; // Allow other users
         });
 
+        // Build channelId map from filteredUsers
+        const channelIdMap = new Map(
+          filteredUsers
+            .filter((u) => u.channel_id)
+            .map((u) => [u.user_id, u.channel_id])
+        );
+
         // Batch fetch last messages and unread counts for all users at once (much faster!)
         const userIds = filteredUsers.map((u) => u.user_id);
         const [lastMessagesResult, unreadCountsResult] = await Promise.all([
-          getLastMessagesBatch(userIds),
+          getLastMessagesBatch(userIds, channelIdMap),
           getUnreadCountsBatch(userIds),
         ]);
 

@@ -1,5 +1,5 @@
 import React, { forwardRef, useCallback, useImperativeHandle, useMemo, useRef } from 'react';
-import { FlatList, Platform, StyleSheet } from 'react-native';
+import { FlatList, Platform, StyleSheet, View } from 'react-native';
 import { EmptyChatState } from './EmptyChatState';
 import { MessageBubble } from './MessageBubble';
 
@@ -24,7 +24,7 @@ interface MessageListProps {
 }
 
 export interface MessageListRef {
-  scrollToBottom: () => void;
+  scrollToStart: (animated?: boolean) => void;
 }
 
 export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
@@ -41,24 +41,27 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
   const flatListRef = useRef<FlatList>(null);
 
   useImperativeHandle(ref, () => ({
-    scrollToBottom: () => {
-      flatListRef.current?.scrollToEnd({ animated: true });
+    scrollToStart: (animated: boolean = true) => {
+      flatListRef.current?.scrollToOffset({ offset: 0, animated });
     },
   }));
 
   const handleScroll = useCallback((event: any) => {
     if (!onAtBottomChange) return;
     const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
-    const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
-    onAtBottomChange(distanceFromBottom < 80);
+    // Since list is inverted, distanceFromTop = distanceFromNewestMessages
+    const distanceFromTop = contentOffset.y;
+    onAtBottomChange(distanceFromTop < 80);
   }, [onAtBottomChange]);
 
   const renderItem = useCallback(({ item }: { item: Message }) => (
-    <MessageBubble
-      message={item}
-      currentUserId={currentUserId}
-      avatar={avatar}
-    />
+    <View style={styles.messageItem}>
+      <MessageBubble
+        message={item}
+        currentUserId={currentUserId}
+        avatar={avatar}
+      />
+    </View>
   ), [currentUserId, avatar]);
 
   const keyExtractor = useCallback((item: Message) => `msg-${item.id}`, []);
@@ -90,6 +93,9 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
       maxToRenderPerBatch={10}
       windowSize={10}
       initialNumToRender={10}
+      inverted={true}
+      scrollsToTop={false}
+      indicatorStyle="white"
     />
   );
 });
@@ -100,8 +106,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#1A0B2E',
   },
   contentContainer: {
-    padding: 16,
-    paddingBottom: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     backgroundColor: '#1A0B2E',
+  },
+  messageItem: {
+    marginBottom: 16,
   },
 });

@@ -55,6 +55,7 @@ import Animated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFeedViewport } from '../hooks/useFeedViewport';
 import { cleanupFeedChannel, removeFeedChannelsByTopicPrefix } from '../realtime/feedRealtimeManager';
 import { CosmicMatchCard } from './CosmicMatchCard';
@@ -389,6 +390,7 @@ function SparklingHeart({ id, delay }: { id: number; delay: number }) {
 export default function DiscoverScreen() {
   const router = useRouter();
   const { screenWidth: SCREEN_WIDTH, screenHeight: SCREEN_HEIGHT, cardHeight } = useFeedViewport();
+  const insets = useSafeAreaInsets();
 
   const [isFlipped, setIsFlipped] = useState(false);
   const [currentProfileIndex, setCurrentProfileIndex] = useState(0);
@@ -548,7 +550,7 @@ export default function DiscoverScreen() {
 
     try {
       const [photosBatch, astroBatch, section1Batch, onboardingBatch] = await Promise.all([
-        supabase.from('user_photos').select('*').in('user_id', userIds).order('is_primary', { ascending: false }).order('display_order', { ascending: true }),
+        supabase.rpc('get_user_photos_batch', { p_user_ids: userIds }),
         supabase.from('astro_details').select('*').in('user_id', userIds),
         supabase.from('section1_qns').select('*').in('user_id', userIds),
         supabase.from('onboarding_responses').select('*').in('user_id', userIds),
@@ -1693,7 +1695,7 @@ export default function DiscoverScreen() {
           end={{ x: 1, y: 0 }}
           style={{
             marginHorizontal: 16,
-            marginTop: 8,
+            marginTop: insets.top + 8,
             borderRadius: 12,
             padding: 12,
             flexDirection: 'row',
@@ -1732,7 +1734,7 @@ export default function DiscoverScreen() {
       {isFallbackFeed && (
         <View style={{
           marginHorizontal: 16,
-          marginTop: 8,
+          marginTop: insets.top + 8,
           borderRadius: 12,
           padding: 12,
           backgroundColor: 'rgba(255, 193, 7, 0.15)',
@@ -1788,7 +1790,7 @@ export default function DiscoverScreen() {
       )}
 
       {/* Top Navigation Bar Overlay */}
-      <View style={styles.topNavContainer}>
+      <View style={[styles.topNavContainer, { paddingTop: insets.top + 16 }]}>
         <TouchableOpacity
           style={styles.topNavIconButton}
           onPress={() => router.push('/filters')}
@@ -2232,6 +2234,7 @@ const styles = StyleSheet.create({
     paddingTop: 60,
     zIndex: 10,
     backgroundColor: 'transparent',
+    marginTop: 0,
   },
   topNavIconButton: {
     width: 40,

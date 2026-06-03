@@ -7,9 +7,11 @@ import { Platform, View } from 'react-native';
 import { HapticTab } from '@/components/haptic-tab';
 import { TAB_BAR_BASE_STYLE } from '@/constants/tab-bar-style';
 import { TabBarVisibilityContext } from '@/hooks/use-tab-bar-visibility';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function TabLayout() {
   const [isHidden, setHidden] = useState(false);
+  const insets = useSafeAreaInsets();
 
   return (
     <TabBarVisibilityContext.Provider value={{ isHidden, setHidden }}>
@@ -18,14 +20,18 @@ export default function TabLayout() {
           headerShown: false,
           tabBarActiveTintColor: '#A855F7',
           tabBarInactiveTintColor: 'rgba(255,255,255,0.4)',
-          tabBarStyle: isHidden ? { display: 'none' } : TAB_BAR_BASE_STYLE,
+          tabBarStyle: isHidden ? { display: 'none' } : { ...TAB_BAR_BASE_STYLE, paddingBottom: insets.bottom, height: 60 + insets.bottom },
           tabBarButton: HapticTab,
           tabBarBackground: () =>
             Platform.OS === 'ios' ? (
-              <BlurView intensity={70} tint="dark" style={{ flex: 1, borderRadius: 30, overflow: 'hidden' }} />
+              <BlurView intensity={70} tint="dark" style={{ flex: 1 }} />
             ) : (
-              <View style={{ flex: 1, backgroundColor: 'rgba(26, 11, 46, 0.95)', borderRadius: 30, overflow: 'hidden' }} />
+              <View style={{ flex: 1, backgroundColor: 'rgba(26, 11, 46, 0.95)' }} />
             ),
+          tabBarShowLabel: false,
+          tabBarIconStyle: {
+            marginBottom: 0,
+          },
         }}>
 
         {/* 1 — Discover */}
@@ -33,7 +39,7 @@ export default function TabLayout() {
           name="index"
           options={{
             title: 'Discover',
-            tabBarIcon: ({ color, size }) => <MaterialIcons name="auto-awesome" size={size} color={color} />,
+            tabBarIcon: ({ color }) => <MaterialIcons name="auto-awesome" size={28} color={color} />,
           }}
         />
 
@@ -42,7 +48,7 @@ export default function TabLayout() {
           name="likes"
           options={{
             title: 'Standouts',
-            tabBarIcon: ({ color, size }) => <MaterialIcons name="stars" size={size} color={color} />,
+            tabBarIcon: ({ color }) => <MaterialIcons name="stars" size={28} color={color} />,
           }}
         />
 
@@ -51,7 +57,7 @@ export default function TabLayout() {
           name="chats"
           options={{
             title: 'Chats',
-            tabBarIcon: ({ color, size }) => <MaterialIcons name="chat-bubble" size={size} color={color} />,
+            tabBarIcon: ({ color }) => <MaterialIcons name="chat-bubble" size={28} color={color} />,
           }}
         />
 
@@ -60,7 +66,7 @@ export default function TabLayout() {
           name="notifications"
           options={{
             title: 'Alerts',
-            tabBarIcon: ({ color, size }) => <MaterialIcons name="notifications" size={size} color={color} />,
+            tabBarIcon: ({ color }) => <MaterialIcons name="notifications" size={28} color={color} />,
           }}
         />
 
@@ -69,7 +75,7 @@ export default function TabLayout() {
           name="profile"
           options={{
             title: 'Profile',
-            tabBarIcon: ({ color, size }) => <MaterialIcons name="person" size={size} color={color} />,
+            tabBarIcon: ({ color }) => <MaterialIcons name="person" size={28} color={color} />,
           }}
         />
 

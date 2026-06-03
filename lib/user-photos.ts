@@ -131,12 +131,15 @@ export const uploadPhotoToStorage = async (
       };
     }
 
-    // Get public URL for the uploaded photo
-    const { data: urlData } = supabase.storage
+    // Get signed URL for the uploaded photo
+    const { data: signedData, error: signedError } = await supabase.storage
       .from('user-photos')
-      .getPublicUrl(storagePath);
+      .createSignedUrl(storagePath, 60 * 60 * 24 * 365); // 1-year expiry
 
-    const photoUrl = urlData.publicUrl;
+    if (signedError || !signedData?.signedUrl) {
+      return { success: false, error: 'Failed to generate signed URL' };
+    }
+    const photoUrl = signedData.signedUrl;
 
     console.log(`✅ Photo ${photoIndex + 1} uploaded successfully:`, photoUrl);
     return {

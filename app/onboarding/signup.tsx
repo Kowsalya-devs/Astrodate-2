@@ -166,31 +166,7 @@ export default function SignupScreen() {
         return;
       }
 
-      if (authUserError && authUserError.code === '42883') {
-        console.warn('⚠️ RPC function check_auth_user_exists not found, falling back to user_profiles check');
 
-        const { data: profileData } = await supabase
-          .from('user_profiles')
-          .select('user_id, phone_number')
-          .eq('phone_number', formatted);
-
-        if (profileData && profileData.length > 0) {
-          console.warn('⚠️ User already exists with this phone number in user_profiles');
-          if (isMountedRef.current) setLoading(false);
-          showAlert(
-            'Account Already Exists',
-            'An account with this phone number already exists. Please use the login page instead.',
-            [
-              {
-                text: 'Go to Login',
-                onPress: () => { router.replace('/onboarding/login'); },
-              },
-              { text: 'Cancel', style: 'cancel' },
-            ]
-          );
-          return;
-        }
-      }
 
       const { data, error } = await supabase.auth.signInWithOtp({ phone: formatted });
 

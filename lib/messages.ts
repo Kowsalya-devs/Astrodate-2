@@ -501,10 +501,12 @@ export const deleteMessages = async (
 /**
  * Batch fetch last messages for multiple users
  * @param otherUserIds - Array of user IDs
+ * @param channelIdMap - Optional map of userId → channelId for channel-scoped queries
  * @returns Map of user_id to last message data
  */
 export const getLastMessagesBatch = async (
-  otherUserIds: string[]
+  otherUserIds: string[],
+  channelIdMap?: Map<string, string>
 ): Promise<{ success: boolean; data?: Map<string, { message: string; timestamp: Date; isRead: boolean; isSentByMe: boolean }>; error?: string }> => {
   try {
     // Get current user ID
@@ -532,16 +534,27 @@ export const getLastMessagesBatch = async (
     const messageMap = new Map<string, { message: string; timestamp: Date; isRead: boolean; isSentByMe: boolean }>();
 
     const results = await Promise.allSettled(
-      otherUserIds.map((otherUserId) =>
-        supabase
+      otherUserIds.map((otherUserId) => {
+        const channelId = channelIdMap?.get(otherUserId);
+        if (channelId) {
+          // Channel-scoped: fast and accurate
+          return supabase
+            .from('messages')
+            .select('sender_id, receiver_id, message_text, created_at, is_read')
+            .eq('channel_id', channelId)
+            .order('created_at', { ascending: false })
+            .limit(1);
+        }
+        // Fallback: direction-based
+        return supabase
           .from('messages')
           .select('sender_id, receiver_id, message_text, created_at, is_read')
           .or(
             `and(sender_id.eq.${currentUserId},receiver_id.eq.${otherUserId}),and(sender_id.eq.${otherUserId},receiver_id.eq.${currentUserId})`
           )
           .order('created_at', { ascending: false })
-          .limit(1)
-      )
+          .limit(1);
+      })
     );
 
     results.forEach((result, index) => {
