@@ -24,11 +24,11 @@ type NotificationPreferenceInput = {
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: false,
-    shouldPlaySound: false,
+    shouldShowAlert: true,   // show banner even when app is in foreground
+    shouldPlaySound: true,
     shouldSetBadge: true,
-    shouldShowBanner: false,
-    shouldShowList: false,
+    shouldShowBanner: true,
+    shouldShowList: true,
   }),
 });
 
@@ -197,7 +197,11 @@ async function getStableDeviceId(): Promise<string> {
 function openNotificationDestination(payload: NotificationPayload): void {
   if (!payload) return;
 
-  if ((payload.type === 'message' || payload.type === 'match') && (payload.chat_id || payload.sender_id)) {
+  // DB sends 'new_message' and 'new_match' — match both forms for safety
+  const isMessage = payload.type === 'new_message' || payload.type === 'message';
+  const isMatch   = payload.type === 'new_match'   || payload.type === 'match';
+
+  if ((isMessage || isMatch) && (payload.chat_id || payload.sender_id)) {
     router.push({
       pathname: '/chat/[id]',
       params: { id: (payload.chat_id || payload.sender_id) as string },
