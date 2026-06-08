@@ -59,7 +59,7 @@ function buildListItems(messages: Message[], currentUserId: string): ListItem[] 
     const nextMsg = sorted[i + 1];
     const currentDateLabel = getDateLabel(msg.timestamp);
     const nextDateLabel = nextMsg ? getDateLabel(nextMsg.timestamp) : null;
-    
+
     if (currentDateLabel !== nextDateLabel) {
       items.push({ type: 'date_divider', label: currentDateLabel });
     }
@@ -100,6 +100,18 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>((
 
   const listItems = useMemo(() => buildListItems(messages, currentUserId), [messages, currentUserId]);
 
+  // Instagram-style "Seen": show it under our most recent message, but only
+  // while that message is still the latest in the whole thread (it vanishes the
+  // moment the other person replies, since their reply becomes the newest item
+  // and already implies they saw it). messages are newest-first once sorted.
+  const seenMessageId = useMemo(() => {
+    if (messages.length === 0) return null;
+    const latest = messages.reduce((newest, m) =>
+      m.timestamp.getTime() > newest.timestamp.getTime() ? m : newest
+    );
+    return latest.senderId === currentUserId && latest.isRead ? latest.id : null;
+  }, [messages, currentUserId]);
+
   const renderItem = useCallback(({ item, index }: { item: ListItem; index: number }) => {
     if (item.type === 'date_divider') {
       return (
@@ -133,9 +145,12 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>((
           avatar={!sameAbove ? avatar : undefined}
           onRetry={onRetry}
         />
+        {item.data.id === seenMessageId && (
+          <Text style={styles.seenText}>Seen</Text>
+        )}
       </View>
     );
-  }, [currentUserId, avatar, onRetry, listItems]);
+  }, [currentUserId, avatar, onRetry, listItems, seenMessageId]);
 
   const keyExtractor = useCallback((item: ListItem, index: number) => {
     if (item.type === 'date_divider') return `date-${item.label}-${index}`;
@@ -179,6 +194,14 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#130820' },
   contentContainer: { paddingHorizontal: 12, paddingTop: 14, paddingBottom: 6, backgroundColor: '#130820' },
   messageItem: { marginBottom: 8 },
+  seenText: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.45)',
+    fontWeight: '500',
+    textAlign: 'right',
+    marginTop: 3,
+    marginRight: 4,
+  },
   dateDivider: {
     flexDirection: 'row', alignItems: 'center',
     marginVertical: 16, marginHorizontal: 8, gap: 10,

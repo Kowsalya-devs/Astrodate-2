@@ -174,7 +174,16 @@ export default function ChatDetailScreen() {
       // Ignore spurious small inset events (e.g. the gesture nav bar) that
       // aren't a real keyboard — otherwise a leftover lift keeps the input bar
       // floating above the bottom after the keyboard closes.
-      setAndroidKeyboardHeight(h > 120 ? h : 0);
+      const isRealKeyboard = h > 120;
+      setAndroidKeyboardHeight(isRealKeyboard ? h : 0);
+      // Opening the keyboard shrinks the list viewport from the bottom but does
+      // NOT change content size, so onContentSizeChange won't fire and the
+      // newest message can slip behind the input bar. Re-pin to the bottom once
+      // the lift has settled — focusing the input should always reveal the
+      // latest message (standard chat behavior).
+      if (isRealKeyboard) {
+        setTimeout(() => messageListRef.current?.scrollToStart(true), 100);
+      }
     });
     const hideSub = Keyboard.addListener('keyboardDidHide', () => {
       setAndroidKeyboardHeight(0);
@@ -1081,14 +1090,16 @@ export default function ChatDetailScreen() {
 
           {/* Input Area */}
           <View style={[styles.inputSafeArea, {
-            // Keyboard CLOSED: pad by the bottom safe-area inset so the dark
-            // input bar fills the gesture-nav area and the controls clear it.
-            // Keyboard OPEN (Android): no inset — the column is already lifted
-            // by the KeyboardAvoidingView marginBottom, and the keyboard covers
-            // the nav area, so any inset here would re-introduce a gap.
-            // (androidKeyboardHeight is always 0 on iOS, where the native
+            // Always pad by the bottom safe-area inset, keyboard open OR closed.
+            // On this platform `keyboardDidShow` reports endCoordinates.height
+            // WITHOUT the navigation-bar inset, so the marginBottom lift alone
+            // stops the input bar one nav-bar-height SHORT of the keyboard top
+            // (the keyboard then crops the bottom of the bar). Keeping this
+            // inset adds that missing strip back so the bar sits flush on the
+            // keyboard — the same constant-inset + lift combo the chatbot
+            // screen uses. (insets.bottom is ~0 on iOS, where the native
             // KeyboardAvoidingView padding handles the lift.)
-            paddingBottom: androidKeyboardHeight > 0 ? 0 : insets.bottom
+            paddingBottom: insets.bottom
           }]}>
             <View style={styles.inputContainer}>
               {/* Left: attachment */}
