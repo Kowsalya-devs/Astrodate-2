@@ -24,10 +24,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-// Complete the OAuth session in the browser
 WebBrowser.maybeCompleteAuthSession();
-
-
 
 export default function SignupScreen() {
   const router = useRouter();
@@ -40,7 +37,6 @@ export default function SignupScreen() {
   const [isFocused, setIsFocused] = useState(false);
   const isMountedRef = useRef(true);
 
-  // Animations
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(40)).current;
   const cardSlideAnim = useRef(new Animated.Value(80)).current;
@@ -63,9 +59,7 @@ export default function SignupScreen() {
   }, [isFocused]);
 
   useEffect(() => {
-    return () => {
-      isMountedRef.current = false;
-    };
+    return () => { isMountedRef.current = false; };
   }, []);
 
   useLayoutEffect(() => {
@@ -87,15 +81,10 @@ export default function SignupScreen() {
     };
   }, []);
 
-  const onGenerateOTP = () => {
-    handleGenerateOTP();
-  };
-
   const handleOAuthSuccess = async (user: any, isSignup: boolean) => {
     const userCreatedAt = new Date(user.created_at);
     const now = new Date();
     const minutesSinceCreation = (now.getTime() - userCreatedAt.getTime()) / (1000 * 60);
-
     if (isSignup && minutesSinceCreation > 2) {
       if (isMountedRef.current) setLoading(false);
       await supabase.auth.signOut();
@@ -103,98 +92,66 @@ export default function SignupScreen() {
       showAlert(
         'Account Already Exists',
         'An account with this Google email already exists. Please use the login page instead.',
-        [
-          {
-            text: 'Go to Login',
-            onPress: () => { router.replace('/onboarding/login'); },
-          },
-        ]
+        [{ text: 'Go to Login', onPress: () => { router.replace('/onboarding/login'); } }]
       );
       return;
     }
-
-    console.log('✅ Signup successful, navigating to basic details');
     if (isMountedRef.current) setLoading(false);
     router.replace('/onboarding/basic-details');
   };
 
   const handleGenerateOTP = async () => {
-
     if (!phoneNumber || phoneNumber.trim() === '') {
       showAlert('Phone number required', 'Please enter your phone number');
       return;
     }
-
     const cleanedNumber = phoneNumber.replace(/\D/g, '');
     if (!cleanedNumber || cleanedNumber.length < 7) {
       showAlert('Invalid phone number', 'Please enter a valid phone number');
       return;
     }
-
     const formatted = `${selectedCountry.dialCode}${cleanedNumber}`;
-
     if (!isValidPhoneNumber(formatted)) {
       showAlert('Invalid phone number', 'Please enter a valid phone number');
       return;
     }
-
     setLoading(true);
     try {
       const { data: authUserData, error: authUserError } = await supabase.rpc('check_auth_user_exists', {
         input_phone: formatted,
       });
-
-      console.log('🔍 Checking auth.users for phone:', formatted, {
-        data: authUserData,
-        error: authUserError,
-      });
-
       if (authUserData && authUserData.length > 0) {
-        console.warn('⚠️ User already exists in auth.users with this phone number');
         if (isMountedRef.current) setLoading(false);
         showAlert(
           'Account Already Exists',
           'An account with this phone number already exists. Please use the login page instead.',
           [
-            {
-              text: 'Go to Login',
-              onPress: () => { router.replace('/onboarding/login'); },
-            },
+            { text: 'Go to Login', onPress: () => { router.replace('/onboarding/login'); } },
             { text: 'Cancel', style: 'cancel' },
           ]
         );
         return;
       }
-
-
-
       const { data, error } = await supabase.auth.signInWithOtp({ phone: formatted });
-
       if (error) {
         let errorMessage = error.message || 'Could not send OTP. Please try again.';
         if (error.message?.includes('Invalid phone number')) {
-          errorMessage = 'Invalid phone number format. Please include country code (e.g., +1 for US, +91 for India)';
+          errorMessage = 'Invalid phone number format. Please include country code.';
         } else if (error.message?.includes('Twilio') || error.message?.includes('SMS')) {
-          errorMessage = 'SMS service error. Please check your Twilio configuration in Supabase.';
+          errorMessage = 'SMS service error. Please check your configuration.';
         }
         showAlert('OTP Generation Failed', errorMessage);
         if (isMountedRef.current) setLoading(false);
         return;
       }
-
       if (!data) {
-        showAlert('OTP Generation Failed', 'No response from server. Please check your Supabase configuration.');
+        showAlert('OTP Generation Failed', 'No response from server.');
         if (isMountedRef.current) setLoading(false);
         return;
       }
-
-      router.push({
-        pathname: '/onboarding/otp-verify',
-        params: { phone: formatted, isSignup: 'true' },
-      });
+      router.push({ pathname: '/onboarding/otp-verify', params: { phone: formatted, isSignup: 'true' } });
     } catch (err: any) {
-      console.error('❌ OTP generation error:', err?.message || String(err));
-      showAlert('OTP generation error', err?.message ?? String(err) ?? 'An unexpected error occurred. Please try again.');
+      showAlert('OTP generation error', err?.message ?? String(err) ?? 'An unexpected error occurred.');
     } finally {
       if (isMountedRef.current) setLoading(false);
     }
@@ -202,24 +159,24 @@ export default function SignupScreen() {
 
   const borderColor = inputBorderAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: ['#E8E0F0', '#7C3AED'],
+    outputRange: ['rgba(255,255,255,0.1)', '#8B5CF6'],
   });
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
         keyboardVerticalOffset={0}
       >
-        {/* Deep space gradient background */}
         <LinearGradient
           colors={['#0D0618', '#1A0B2E', '#2D1255', '#3D1A6E']}
           style={styles.background}
           start={{ x: 0.1, y: 0 }}
           end={{ x: 0.9, y: 1 }}
         >
-          {/* Star field dots */}
+          {/* Star field */}
           <View style={styles.starField} pointerEvents="none">
             {[...Array(28)].map((_, i) => (
               <View
@@ -243,7 +200,7 @@ export default function SignupScreen() {
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
-            {/* Hero section */}
+            {/* Hero section — hidden when keyboard is open */}
             {!isKeyboardVisible && (
               <Animated.View
                 style={[
@@ -251,24 +208,12 @@ export default function SignupScreen() {
                   { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
                 ]}
               >
-                <TouchableOpacity
-                  style={styles.backButton}
-                  onPress={() => router.back()}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.backButtonInner}>
-                    <MaterialIcons name="arrow-back" size={20} color="#E0D4FF" />
-                  </View>
-                </TouchableOpacity>
-
-                {/* Glow orb behind logo */}
                 <View style={styles.logoGlow} />
                 <Image
                   source={require('../../assets/images/logo.png')}
                   style={styles.heroLogo}
                   resizeMode="contain"
                 />
-
                 <Text style={styles.heroTitle}>Create Account</Text>
                 <Text style={styles.heroSubtitle}>Love is written in the stars ✦</Text>
               </Animated.View>
@@ -281,7 +226,6 @@ export default function SignupScreen() {
                 { transform: [{ translateY: cardSlideAnim }], opacity: fadeAnim },
               ]}
             >
-              {/* Card top accent line */}
               <LinearGradient
                 colors={['#7C3AED', '#A855F7', '#EC4899']}
                 style={styles.cardAccentLine}
@@ -295,9 +239,6 @@ export default function SignupScreen() {
 
                 {/* Phone input */}
                 <Animated.View style={[styles.inputContainer, { borderColor }]}>
-                  <View style={styles.phoneIconWrap}>
-                    <MaterialIcons name="phone" size={17} color="#9B72CF" />
-                  </View>
                   <CountryCodePicker
                     selectedCountry={selectedCountry}
                     onSelect={setSelectedCountry}
@@ -310,7 +251,7 @@ export default function SignupScreen() {
                       if (digitsOnly.length <= 10) setPhoneNumber(digitsOnly);
                     }}
                     placeholder="Phone number"
-                    placeholderTextColor="#B0A0C8"
+                    placeholderTextColor="rgba(255,255,255,0.3)"
                     style={styles.input}
                     keyboardType="number-pad"
                     autoCapitalize="none"
@@ -324,27 +265,25 @@ export default function SignupScreen() {
                       style={styles.clearButton}
                       hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                     >
-                      <MaterialIcons name="cancel" size={18} color="#B0A0C8" />
+                      <MaterialIcons name="cancel" size={18} color="rgba(255,255,255,0.3)" />
                     </TouchableOpacity>
                   )}
                 </Animated.View>
 
-                {/* Number length hint */}
-                <Text style={styles.inputHint}>
-                  {phoneNumber.length > 0
-                    ? `${phoneNumber.length}/10 digits entered`
-                    : `${selectedCountry.flag} ${selectedCountry.name} (${selectedCountry.dialCode})`}
-                </Text>
+                {/* Digit counter — only shown while typing */}
+                {phoneNumber.length > 0 && (
+                  <Text style={styles.digitCount}>{phoneNumber.length}/10</Text>
+                )}
 
                 {/* OTP Button */}
                 <TouchableOpacity
-                  onPress={onGenerateOTP}
+                  onPress={handleGenerateOTP}
                   activeOpacity={0.85}
                   disabled={loading}
-                  style={styles.otpButtonWrapper}
+                  style={[styles.otpButtonWrapper, phoneNumber.length === 0 && styles.otpButtonDisabled]}
                 >
                   <LinearGradient
-                    colors={loading ? ['#6B6B8A', '#6B6B8A'] : ['#6D28D9', '#7C3AED', '#9333EA']}
+                    colors={loading ? ['#3D2A6E', '#3D2A6E'] : ['#6D28D9', '#7C3AED', '#9333EA']}
                     style={styles.otpButton}
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 0 }}
@@ -353,7 +292,7 @@ export default function SignupScreen() {
                       <ActivityIndicator color="#fff" size="small" />
                     ) : (
                       <>
-                        <MaterialIcons name="person-add" size={18} color="#fff" style={{ marginRight: 8 }} />
+                        <MaterialIcons name="person-add" size={17} color="#fff" style={{ marginRight: 8 }} />
                         <Text style={styles.otpButtonText}>Get OTP</Text>
                       </>
                     )}
@@ -363,9 +302,13 @@ export default function SignupScreen() {
                 {/* Terms note */}
                 <Text style={styles.termsText}>
                   By signing up you agree to our{' '}
-                  <Text style={styles.termsLink}>Terms of Service</Text>
+                  <Text style={styles.termsLink} onPress={() => router.push('/terms')}>
+                    Terms of Service
+                  </Text>
                   {' '}and{' '}
-                  <Text style={styles.termsLink}>Privacy Policy</Text>
+                  <Text style={styles.termsLink} onPress={() => router.push('/privacy')}>
+                    Privacy Policy
+                  </Text>
                 </Text>
 
                 {/* Login link */}
@@ -403,175 +346,161 @@ const styles = StyleSheet.create({
 
   // Hero
   heroSection: {
-    paddingTop: 20,
-    paddingBottom: 32,
+    paddingTop: 70,
+    paddingBottom: 36,
     alignItems: 'center',
     paddingHorizontal: 24,
   },
-  backButton: {
-    position: 'absolute',
-    top: 20,
-    left: 20,
-    zIndex: 10,
-  },
-  backButtonInner: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   logoGlow: {
     position: 'absolute',
-    width: 120,
-    height: 120,
-    borderRadius: 60,
+    width: 110,
+    height: 110,
+    borderRadius: 55,
     backgroundColor: '#7C3AED',
-    opacity: 0.18,
-    top: 50,
+    opacity: 0.15,
+    top: 78,
     alignSelf: 'center',
   },
   heroLogo: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
-    marginTop: 16,
-    marginBottom: 20,
-    borderWidth: 2,
-    borderColor: 'rgba(167,139,250,0.4)',
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    marginBottom: 22,
+    borderWidth: 1.5,
+    borderColor: 'rgba(167,139,250,0.35)',
   },
   heroTitle: {
-    fontSize: 34,
-    fontWeight: '800',
+    fontSize: 32,
+    fontWeight: '700',
     color: '#F3EEFF',
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
     marginBottom: 8,
     textAlign: 'center',
   },
   heroSubtitle: {
-    fontSize: 15,
-    color: '#C4A8F0',
+    fontSize: 14,
+    color: '#9B7DC8',
     textAlign: 'center',
-    opacity: 0.9,
-    letterSpacing: 0.2,
+    letterSpacing: 0.3,
   },
 
-  // Card
+  // Card — dark glass style
   card: {
     width: '100%',
-    backgroundColor: '#FDFBFF',
-    borderTopLeftRadius: 36,
-    borderTopRightRadius: 36,
+    backgroundColor: '#130826',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
     overflow: 'hidden',
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: 'rgba(124,58,237,0.2)',
     shadowColor: '#4B0082',
-    shadowOpacity: 0.25,
-    shadowOffset: { width: 0, height: -6 },
-    shadowRadius: 24,
-    elevation: 16,
+    shadowOpacity: 0.4,
+    shadowOffset: { width: 0, height: -8 },
+    shadowRadius: 28,
+    elevation: 20,
   },
   cardAccentLine: {
-    height: 4,
+    height: 3,
     width: '100%',
+    opacity: 0.9,
   },
   cardContent: {
-    paddingTop: 32,
+    paddingTop: 30,
     paddingBottom: 44,
     paddingHorizontal: 28,
   },
   cardTitle: {
-    fontSize: 30,
-    fontWeight: '800',
-    color: '#1A0B2E',
-    marginBottom: 6,
-    letterSpacing: 0.2,
+    fontSize: 26,
+    fontWeight: '700',
+    color: '#EDE8FF',
+    marginBottom: 5,
+    letterSpacing: 0.1,
   },
   cardSubtitle: {
-    fontSize: 14,
-    color: '#8B7BAE',
-    marginBottom: 28,
-    letterSpacing: 0.1,
+    fontSize: 13,
+    color: '#6B5A8A',
+    marginBottom: 26,
+    letterSpacing: 0.2,
   },
 
   // Input
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F7F3FF',
-    borderRadius: 18,
-    borderWidth: 1.5,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 12,
+    borderWidth: 1,
     paddingHorizontal: 14,
-    paddingVertical: 4,
-    marginBottom: 8,
-  },
-  phoneIconWrap: {
-    width: 26,
-    alignItems: 'center',
-    marginRight: 6,
+    paddingVertical: 2,
+    marginBottom: 6,
   },
   inputDivider: {
     width: 1,
-    height: 22,
-    backgroundColor: '#DDD4F0',
+    height: 20,
+    backgroundColor: 'rgba(255,255,255,0.08)',
     marginHorizontal: 10,
   },
   input: {
     flex: 1,
-    color: '#1A0B2E',
-    fontSize: 16,
+    color: '#EDE8FF',
+    fontSize: 15,
     fontWeight: '500',
-    paddingVertical: 14,
-    letterSpacing: 0.5,
+    paddingVertical: 15,
+    letterSpacing: 0.8,
   },
   clearButton: {
     padding: 4,
     marginLeft: 4,
   },
-  inputHint: {
-    fontSize: 12,
-    color: '#A090C0',
-    marginBottom: 24,
-    marginLeft: 4,
-    letterSpacing: 0.1,
+  digitCount: {
+    fontSize: 11,
+    color: '#6B5A8A',
+    marginBottom: 20,
+    marginLeft: 2,
+    letterSpacing: 0.5,
   },
 
   // OTP Button
   otpButtonWrapper: {
-    borderRadius: 18,
+    borderRadius: 12,
     overflow: 'hidden',
-    marginBottom: 16,
+    marginTop: 8,
+    marginBottom: 20,
     shadowColor: '#7C3AED',
-    shadowOpacity: 0.35,
+    shadowOpacity: 0.4,
     shadowOffset: { width: 0, height: 4 },
-    shadowRadius: 12,
-    elevation: 6,
+    shadowRadius: 14,
+    elevation: 8,
+  },
+  otpButtonDisabled: {
+    opacity: 0.5,
   },
   otpButton: {
-    paddingVertical: 16,
+    paddingVertical: 15,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
   },
   otpButtonText: {
     color: '#FFFFFF',
-    fontWeight: '800',
-    fontSize: 17,
-    letterSpacing: 0.4,
+    fontWeight: '600',
+    fontSize: 16,
+    letterSpacing: 0.5,
   },
 
   // Terms
   termsText: {
     fontSize: 12,
-    color: '#A090C0',
+    color: '#4A3A6A',
     textAlign: 'center',
     lineHeight: 18,
     marginBottom: 28,
     paddingHorizontal: 8,
   },
   termsLink: {
-    color: '#7C3AED',
+    color: '#9B72CF',
     fontWeight: '600',
   },
 
@@ -582,12 +511,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   loginText: {
-    color: '#8B7BAE',
-    fontSize: 14,
+    color: '#4A3A6A',
+    fontSize: 13,
   },
   loginLink: {
-    color: '#7C3AED',
-    fontWeight: '700',
-    fontSize: 14,
+    color: '#9B72CF',
+    fontWeight: '600',
+    fontSize: 13,
   },
 });

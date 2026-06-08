@@ -362,11 +362,8 @@ export default function BirthDetailsScreen() {
     if (!dateOfBirth) {
       newErrors.dateOfBirth = 'Date of birth is required';
     } else {
-      const today = new Date();
-      const age = today.getFullYear() - dateOfBirth.getFullYear();
-      const monthDiff = today.getMonth() - dateOfBirth.getMonth();
-      if (age < 18 || (age === 18 && monthDiff < 0)) {
-        newErrors.dateOfBirth = 'You must be at least 18 years old';
+      if (calculateAge(dateOfBirth) < 18) {
+        newErrors.dateOfBirth = 'You must be at least 18 years old to use Astrodate';
       }
     }
 
@@ -757,26 +754,64 @@ export default function BirthDetailsScreen() {
         visible={showAgeModal}
         transparent
         animationType="fade"
-        onRequestClose={() => setShowAgeModal(false)}>
+        onRequestClose={() => {
+          // Only allow dismissal if user is 18+
+          if (dateOfBirth && calculateAge(dateOfBirth) >= 18) {
+            setShowAgeModal(false);
+          }
+        }}>
         <View style={styles.ageModalOverlay}>
           <View style={styles.ageModalContent}>
-            <View style={styles.ageModalHeader}>
-              <Ionicons name="checkmark-circle" size={32} color="#8B5CF6" />
-              <Text style={styles.ageModalTitle}>Age Confirmation</Text>
-            </View>
-            {dateOfBirth && (
-              <View style={styles.ageModalBody}>
-                <Text style={styles.ageText}>
-                  You are <Text style={styles.ageNumber}>{calculateAge(dateOfBirth)}</Text> years old
-                </Text>
-              </View>
+            {dateOfBirth && calculateAge(dateOfBirth) >= 18 ? (
+              // ── PASS: user is 18+ ──────────────────────────────────────
+              <>
+                <View style={styles.ageModalHeader}>
+                  <Ionicons name="checkmark-circle" size={32} color="#8B5CF6" />
+                  <Text style={styles.ageModalTitle}>Age Confirmed</Text>
+                </View>
+                <View style={styles.ageModalBody}>
+                  <Text style={styles.ageText}>
+                    You are <Text style={styles.ageNumber}>{calculateAge(dateOfBirth)}</Text> years old
+                  </Text>
+                  <Text style={styles.ageSubtext}>You meet the minimum age requirement.</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.ageModalButton}
+                  onPress={() => setShowAgeModal(false)}
+                  activeOpacity={0.7}>
+                  <Text style={styles.ageModalButtonText}>Continue</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              // ── BLOCK: user is under 18 ────────────────────────────────
+              <>
+                <View style={styles.ageModalHeader}>
+                  <Ionicons name="close-circle" size={40} color="#EF4444" />
+                  <Text style={[styles.ageModalTitle, { color: '#EF4444' }]}>Age Restricted</Text>
+                </View>
+                <View style={styles.ageModalBody}>
+                  <Text style={styles.ageText}>
+                    You must be at least{' '}
+                    <Text style={[styles.ageNumber, { color: '#EF4444' }]}>18</Text> years old
+                    {'\n'}to use Astrodate.
+                  </Text>
+                  <Text style={styles.ageSubtext}>
+                    This app is intended for adults only. Please come back when you meet the age requirement.
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={[styles.ageModalButton, { backgroundColor: '#EF4444' }]}
+                  onPress={() => {
+                    setShowAgeModal(false);
+                    setDateOfBirth(null);
+                    setDateInputs({ year: '', month: '', day: '' });
+                    setErrors((prev) => ({ ...prev, dateOfBirth: 'You must be at least 18 years old to use Astrodate' }));
+                  }}
+                  activeOpacity={0.7}>
+                  <Text style={styles.ageModalButtonText}>Go Back</Text>
+                </TouchableOpacity>
+              </>
             )}
-            <TouchableOpacity
-              style={styles.ageModalButton}
-              onPress={() => setShowAgeModal(false)}
-              activeOpacity={0.7}>
-              <Text style={styles.ageModalButtonText}>Continue</Text>
-            </TouchableOpacity>
           </View>
         </View>
       </Modal>

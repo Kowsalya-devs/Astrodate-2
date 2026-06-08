@@ -15,6 +15,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useFocusEffect } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
@@ -23,41 +24,43 @@ import { useRouter } from 'expo-router';
 import LottieView from 'lottie-react-native';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Dimensions,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-  type NativeScrollEvent,
-  type NativeSyntheticEvent
+    ActivityIndicator,
+    Dimensions,
+    Modal,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
+    type NativeScrollEvent,
+    type NativeSyntheticEvent
 } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import type { AnimatedRef } from 'react-native-reanimated';
 import Animated, {
-  createAnimatedComponent,
-  Easing,
-  interpolate,
-  interpolateColor,
-  runOnJS,
-  runOnUI,
-  scrollTo,
-  useAnimatedProps,
-  useAnimatedRef,
-  useAnimatedScrollHandler,
-  useAnimatedStyle,
-  useDerivedValue,
-  useSharedValue,
-  withSpring,
-  withTiming,
+    createAnimatedComponent,
+    Easing,
+    interpolate,
+    interpolateColor,
+    runOnJS,
+    runOnUI,
+    scrollTo,
+    useAnimatedProps,
+    useAnimatedRef,
+    useAnimatedScrollHandler,
+    useAnimatedStyle,
+    useDerivedValue,
+    useSharedValue,
+    withSpring,
+    withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFeedViewport } from '../hooks/useFeedViewport';
 import { cleanupFeedChannel, removeFeedChannelsByTopicPrefix } from '../realtime/feedRealtimeManager';
+import FeedEmptyState from './FeedEmptyState';
+import SwipeTutorialOverlay from './SwipeTutorialOverlay';
 import { CosmicMatchCard } from './CosmicMatchCard';
 
 const { width: STATIC_WIDTH, height: STATIC_HEIGHT } = Dimensions.get('window');
@@ -419,8 +422,10 @@ export default function DiscoverScreen() {
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [showReportReasonModal, setShowReportReasonModal] = useState(false);
   const [showUpgradeSheet, setShowUpgradeSheet] = useState(false);
+  const [superLikesRemaining, setSuperLikesRemaining] = useState<number | null>(null);
   const [reportingProfile, setReportingProfile] = useState<Profile | null>(null);
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [reportedUserIds, setReportedUserIds] = useState<Set<string>>(new Set());
   const [isFallbackFeed, setIsFallbackFeed] = useState(false);
   // Astro Events banner
@@ -430,6 +435,10 @@ export default function DiscoverScreen() {
   const [matchIcebreaker, setMatchIcebreaker] = useState<string | null>(null);
   const [matchAstroScore, setMatchAstroScore] = useState<number | null>(null);
   const [matchId, setMatchId] = useState<string | null>(null);
+
+  // ── Swipe tutorial ──────────────────────────────────────────────────────────
+  const [showTutorial, setShowTutorial] = useState(false);
+  const tutorialCheckedRef = useRef(false);
 
   const rotateY = useSharedValue(0);
   const lastScrollY = useSharedValue(0);
@@ -460,6 +469,38 @@ export default function DiscoverScreen() {
       return () => setTabBarHidden(false);
     }, [setTabBarHidden])
   );
+
+  // Fetch remaining super-likes for the badge
+  const fetchSuperLikesRemaining = useCallback(async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data, error } = await (supabase.rpc as any)('get_super_likes_remaining', { p_user_id: user.id });
+      if (!error && data !== null) setSuperLikesRemaining(data as number);
+    } catch (err) {
+      console.error('Error fetching super likes remaining:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchSuperLikesRemaining();
+  }, [fetchSuperLikesRemaining]);
+
+  useEffect(() => {
+    let mounted = true;
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user || !mounted) return;
+      supabase
+        .from('notification_delivery_logs')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .in('status', ['sent', 'pending'])
+        .then(({ count }) => {
+          if (mounted) setUnreadCount(count ?? 0);
+        });
+    });
+    return () => { mounted = false; };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -550,13 +591,13 @@ export default function DiscoverScreen() {
 
     try {
       const [photosBatch, astroBatch, section1Batch, onboardingBatch] = await Promise.all([
-        supabase.rpc('get_user_photos_batch', { p_user_ids: userIds }),
+        (supabase.rpc as any)('get_user_photos_batch', { p_user_ids: userIds }),
         supabase.from('astro_details').select('*').in('user_id', userIds),
         supabase.from('section1_qns').select('*').in('user_id', userIds),
         supabase.from('onboarding_responses').select('*').in('user_id', userIds),
       ]);
 
-      const allPhotos = photosBatch.data || [];
+      const allPhotos: { user_id: string; photo_url: string; is_primary: boolean }[] = photosBatch.data || [];
       const allAstro = astroBatch.data || [];
       const allSection1 = section1Batch.data || [];
       const allOnboarding = onboardingBatch.data || [];
@@ -679,6 +720,13 @@ export default function DiscoverScreen() {
       setProfiles([]);
     } finally {
       setLoadingProfiles(false);
+      // Show one-time swipe tutorial on first feed load
+      if (!tutorialCheckedRef.current) {
+        tutorialCheckedRef.current = true;
+        AsyncStorage.getItem('hasSeenSwipeTutorial').then((seen) => {
+          if (!seen) setShowTutorial(true);
+        }).catch(() => {});
+      }
     }
   }, [mapMatchesToProfiles]); // stable — astro data read from refs, not state
 
@@ -1043,6 +1091,7 @@ export default function DiscoverScreen() {
         if (result.success) {
           signalSuperLike(likedUserId);
           await checkAndShowMatch(likedUserId, currentProfile);
+          void fetchSuperLikesRemaining();
         } else if (result.error === 'THE_USER_NO_LONGER_EXISTS') {
           console.warn(`⚠️ User ${likedUserId} no longer exists, skipping...`);
         } else if (result.error === 'QUOTA_EXCEEDED' || result.error === 'SUPER_LIKE_QUOTA_EXCEEDED') {
@@ -1057,7 +1106,7 @@ export default function DiscoverScreen() {
         console.error('Error in handleSuperLike backend:', error);
       }
     }
-  }, [isFlipped, isTransitioning, profiles, currentProfileIndex, checkAndShowMatch, updateProfileIndex, setNextCardBlurActive, SCREEN_WIDTH, translateY, opacity]);
+  }, [isFlipped, isTransitioning, profiles, currentProfileIndex, checkAndShowMatch, updateProfileIndex, setNextCardBlurActive, SCREEN_WIDTH, translateY, opacity, fetchSuperLikesRemaining]);
 
   const resetCardPosition = () => {
     'worklet';
@@ -1759,10 +1808,8 @@ export default function DiscoverScreen() {
           <ActivityIndicator size="large" color="#A855F7" />
         </View>
       ) : profiles.length === 0 ? (
-        <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-          <Text style={{ color: '#FFFFFF', marginTop: 8 }}>
-            No matches yet. Check back soon!
-          </Text>
+        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 100, justifyContent: 'center' }}>
+          <FeedEmptyState onExpandFilters={() => router.push('/filters')} />
         </View>
       ) : (
         <View style={styles.profileStackWrapper}>
@@ -1800,6 +1847,22 @@ export default function DiscoverScreen() {
 
         <View style={{ flex: 1 }} />
 
+        {/* Bell icon — notifications */}
+        <TouchableOpacity
+          style={[styles.topNavIconButton, { marginRight: 8 }]}
+          onPress={() => router.push('/(tabs)/notifications')}
+          activeOpacity={0.7}
+        >
+          <MaterialIcons name="notifications" size={24} color="#FFFFFF" />
+          {unreadCount > 0 && (
+            <View style={styles.bellBadge}>
+              <Text style={styles.bellBadgeText}>
+                {unreadCount > 9 ? '9+' : unreadCount}
+              </Text>
+            </View>
+          )}
+        </TouchableOpacity>
+
         {profiles.length > 0 && currentProfileIndex < profiles.length && (
           <TouchableOpacity
             style={styles.topNavIconButton}
@@ -1829,6 +1892,11 @@ export default function DiscoverScreen() {
                 <BlurView intensity={25} tint="dark" style={StyleSheet.absoluteFill} />
                 <AnimatedIonicons name="star" size={28} style={superLikeIconStyle} />
               </Animated.View>
+              {superLikesRemaining !== null && superLikesRemaining <= 2 && superLikesRemaining < 999 && (
+                <View style={styles.superLikeCountBadge}>
+                  <Text style={styles.superLikeCountBadgeText}>{superLikesRemaining}</Text>
+                </View>
+              )}
             </TouchableOpacity>
 
             <TouchableOpacity activeOpacity={0.7} style={styles.actionButtonSmallWrapper} onPress={handleLike} disabled={isTransitioning}>
@@ -2135,6 +2203,13 @@ export default function DiscoverScreen() {
             <Text style={styles.upgradeSheetMessage}>
               You've used all your Shooting Stars. Upgrade to Stellar or Cosmic for more.
             </Text>
+            {superLikesRemaining !== null && superLikesRemaining < 999 && (
+              <Text style={styles.upgradeSheetRemainingText}>
+                {superLikesRemaining === 0
+                  ? '0 left this week'
+                  : `${superLikesRemaining} left this week`}
+              </Text>
+            )}
             <TouchableOpacity
               style={styles.upgradeButton}
               onPress={() => {
@@ -2216,6 +2291,11 @@ export default function DiscoverScreen() {
       {/* Removed missed match popup */}
 
       {/* Removed like/dislike action buttons */}
+
+      {/* One-time swipe tutorial overlay */}
+      {showTutorial && (
+        <SwipeTutorialOverlay onDismiss={() => setShowTutorial(false)} />
+      )}
     </View>
   );
 }
@@ -2245,6 +2325,25 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(13, 6, 24, 0.55)',
     borderWidth: 1,
     borderColor: 'rgba(168, 85, 247, 0.25)',
+  },
+  bellBadge: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#ef4444',
+    borderWidth: 1.5,
+    borderColor: 'rgba(13, 6, 24, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 3,
+  },
+  bellBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '700',
   },
   topNavCategories: {
     flexDirection: 'row',
@@ -3995,5 +4094,33 @@ const styles = StyleSheet.create({
     flex: 1,
     lineHeight: 20,
     fontSize: 14,
+  },
+  superLikeCountBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#EF4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+    borderWidth: 1.5,
+    borderColor: '#000',
+  },
+  superLikeCountBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+    lineHeight: 13,
+  },
+  upgradeSheetRemainingText: {
+    fontSize: 13,
+    color: '#FBBF24',
+    textAlign: 'center',
+    fontWeight: '600',
+    marginTop: -16,
+    marginBottom: 20,
   },
 });

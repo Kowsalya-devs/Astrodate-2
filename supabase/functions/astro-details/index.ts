@@ -64,6 +64,10 @@ Deno.serve(async (req) => {
       ]);
 
       if (!planetsRes.ok || !nakshatraRes.ok) {
+        let planetsBody = '', nakshatraBody = '';
+        try { planetsBody = await planetsRes.text(); } catch {}
+        try { nakshatraBody = await nakshatraRes.text(); } catch {}
+        console.error(`[astro-details] basic mode errors — planets ${planetsRes.status}: ${planetsBody} | nakshatra ${nakshatraRes.status}: ${nakshatraBody}`);
         return new Response(JSON.stringify({
           error: "Failed to fetch from Astrology API",
           status: { planets: planetsRes.status, nakshatra: nakshatraRes.status },
@@ -134,9 +138,13 @@ Deno.serve(async (req) => {
       const res = await fetch(`${BASE_URL}/daily_nakshatra_prediction`, { method: 'POST', headers: commonHeaders, body });
 
       if (!res.ok) {
+        let apiErrorBody = '';
+        try { apiErrorBody = await res.text(); } catch {}
+        console.error(`[astro-details] daily_nakshatra_prediction ${res.status}:`, apiErrorBody);
         return new Response(JSON.stringify({
           error: "Failed to fetch daily prediction",
           status: res.status,
+          detail: apiErrorBody,
           endpoint: 'daily_nakshatra_prediction'
         }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },

@@ -1,7 +1,6 @@
 import { COUNTRIES, CountryCodePicker, type Country } from '@/components/country-code-picker';
 import { useAuthAlert } from '@/lib/auth-alert-context';
 import { supabase } from '@/lib/supabase';
-import { verifyPhoneNumberExists } from '@/lib/user-profile';
 import { isValidPhoneNumber } from '@/utils/phone-utils';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -26,7 +25,6 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-// Complete the OAuth session in the browser
 WebBrowser.maybeCompleteAuthSession();
 
 export default function LoginScreen() {
@@ -41,7 +39,6 @@ export default function LoginScreen() {
   const isMountedRef = useRef(true);
   const oauthRetryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Animations
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(40)).current;
   const cardSlideAnim = useRef(new Animated.Value(80)).current;
@@ -92,10 +89,6 @@ export default function LoginScreen() {
     };
   }, []);
 
-  const onGenerateOTP = () => {
-    handleGenerateOTP();
-  };
-
   const handleOAuthSuccess = async (user: any, isSignup: boolean) => {
     if (!isSignup) {
       const { data: profile } = await supabase
@@ -111,92 +104,51 @@ export default function LoginScreen() {
         return;
       }
     }
-    console.log('✅ Login successful, navigating to home');
     if (isMountedRef.current) setLoading(false);
     router.replace('/(tabs)');
   };
 
   const handleGenerateOTP = async () => {
-
     if (!phoneNumber || phoneNumber.trim() === '') {
       showAlert('Phone number required', 'Please enter your phone number');
       return;
     }
-
     const cleanedNumber = phoneNumber.replace(/\D/g, '');
     if (!cleanedNumber || cleanedNumber.length < 7) {
       showAlert('Invalid phone number', 'Please enter a valid phone number');
       return;
     }
-
     const formatted = `${selectedCountry.dialCode}${cleanedNumber}`;
-
     if (!isValidPhoneNumber(formatted)) {
       showAlert('Invalid phone number', 'Please enter a valid phone number');
       return;
     }
-
     setLoading(true);
     try {
-      console.log('🔍 Verifying user with phone number:', formatted);
-      const verificationResult = await verifyPhoneNumberExists(formatted);
-
-      if (!verificationResult.success || !verificationResult.data) {
-        console.warn('⚠️ No account found with this phone number');
-        console.warn('⚠️ Verification result:', verificationResult);
-
-        if (isMountedRef.current) setLoading(false);
-        showAlert(
-          'Account Not Found',
-          'No account found with this phone number. Please sign up first.',
-          [
-            {
-              text: 'Go to Signup',
-              onPress: () => { router.replace('/onboarding/signup'); },
-            },
-            {
-              text: 'Cancel',
-              onPress: () => { if (isMountedRef.current) setLoading(false); },
-              style: 'cancel',
-            },
-          ]
-        );
-        return;
-      }
-
-      console.log('✅ User found in database:', {
-        userId: verificationResult.data.user_id,
-        phoneInDb: verificationResult.phoneNumberInDb,
-        name: verificationResult.data.full_name,
-      });
-
+      // Skip pre-flight RPC check — just send OTP directly.
+      // Supabase signInWithOtp works regardless; the account-exists gate
+      // is enforced in phone-verification.tsx after OTP is confirmed.
+      // Pre-flight checks caused false negatives due to RLS/phone format issues.
       const { data, error } = await supabase.auth.signInWithOtp({ phone: formatted });
-
       if (error) {
         let errorMessage = error.message || 'Could not send OTP. Please try again.';
         if (error.message?.includes('Invalid phone number')) {
-          errorMessage = 'Invalid phone number format. Please include country code (e.g., +1 for US, +91 for India)';
+          errorMessage = 'Invalid phone number format. Please include country code.';
         } else if (error.message?.includes('Twilio') || error.message?.includes('SMS')) {
-          errorMessage = 'SMS service error. Please check your Twilio configuration in Supabase.';
+          errorMessage = 'SMS service error. Please check your configuration.';
         }
         showAlert('OTP Generation Failed', errorMessage);
         if (isMountedRef.current) setLoading(false);
         return;
       }
-
       if (!data) {
-        showAlert('OTP Generation Failed', 'No response from server. Please check your Supabase configuration.');
+        showAlert('OTP Generation Failed', 'No response from server.');
         if (isMountedRef.current) setLoading(false);
         return;
       }
-
-      router.push({
-        pathname: '/onboarding/phone-verification',
-        params: { phone: formatted },
-      });
+      router.push({ pathname: '/onboarding/phone-verification', params: { phone: formatted } });
     } catch (err: any) {
-      console.error('❌ Login error:', err?.message || String(err));
-      showAlert('Login error', err?.message ?? String(err) ?? 'An unexpected error occurred. Please try again.');
+      showAlert('Login error', err?.message ?? String(err) ?? 'An unexpected error occurred.');
     } finally {
       if (isMountedRef.current) setLoading(false);
     }
@@ -206,69 +158,47 @@ export default function LoginScreen() {
     try {
       setLoading(true);
       const finalRedirectUri = makeRedirectUri({ native: 'astrodate://auth/callback' });
-      console.log('🔗 Final Redirect URI:', finalRedirectUri);
-
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
-        options: {
-          redirectTo: finalRedirectUri,
-          skipBrowserRedirect: false,
-        }
+        options: { redirectTo: finalRedirectUri, skipBrowserRedirect: false },
       });
-
       if (error) {
-        console.error('❌ OAuth error:', error);
         showAlert('OAuth error', error.message || 'Could not start OAuth');
         if (isMountedRef.current) setLoading(false);
         return;
       }
-
       if (!data || !data.url) {
-        console.error('❌ No OAuth URL received');
         showAlert('OAuth error', 'Invalid OAuth response from Supabase');
         if (isMountedRef.current) setLoading(false);
         return;
       }
-
       const result = await WebBrowser.openAuthSessionAsync(data.url, finalRedirectUri, { showInRecents: true });
-      console.log('📱 OAuth result:', result.type);
-
       if (result.type === 'cancel') {
         if (isMountedRef.current) setLoading(false);
         return;
       }
-
       if (result.type === 'success' && result.url) {
         try {
           const urlObj = new URL(result.url);
           const hashParams = new URLSearchParams(urlObj.hash.substring(1));
           const accessToken = hashParams.get('access_token');
           const refreshToken = hashParams.get('refresh_token');
-
           if (accessToken && refreshToken) {
             const { data: sessionData, error: sessionError } = await supabase.auth.setSession({
               access_token: accessToken,
               refresh_token: refreshToken,
             });
-
-          if (sessionError) {
-            // Before: setLoading(false); return;
-            // After:
-            if (isMountedRef.current) setLoading(false);
-            showAlert(
-              'Authentication Error',
-              'Could not establish session. Please try again.'
-            );
-            return;
-          }
+            if (sessionError) {
+              if (isMountedRef.current) setLoading(false);
+              showAlert('Authentication Error', 'Could not establish session. Please try again.');
+              return;
+            }
             if (sessionData?.session?.user) {
               await handleOAuthSuccess(sessionData.session.user, false);
               return;
             }
           }
-        } catch (urlError) {
-          console.log('⚠️ Could not parse URL, trying session retrieval...');
-        }
+        } catch (urlError) {}
 
         let retries = 0;
         const maxRetries = 10;
@@ -277,7 +207,6 @@ export default function LoginScreen() {
           const sessionResult = await supabase.auth.getSession();
           const session = sessionResult?.data?.session;
           const sessionError = sessionResult?.error;
-
           if (sessionError) {
             if (retries >= maxRetries) {
               if (isMountedRef.current) setLoading(false);
@@ -288,7 +217,6 @@ export default function LoginScreen() {
             }
             return;
           }
-
           if (session?.user) {
             await handleOAuthSuccess(session.user, false);
           } else {
@@ -301,13 +229,11 @@ export default function LoginScreen() {
             }
           }
         };
-
         oauthRetryTimeoutRef.current = setTimeout(checkSession, 500);
       } else {
         if (isMountedRef.current) setLoading(false);
       }
     } catch (err: any) {
-      console.error('❌ Exception in OAuth:', err);
       showAlert('OAuth error', err?.message ?? String(err));
       if (isMountedRef.current) setLoading(false);
     }
@@ -315,24 +241,24 @@ export default function LoginScreen() {
 
   const borderColor = inputBorderAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: ['#E8E0F0', '#7C3AED'],
+    outputRange: ['rgba(255,255,255,0.1)', '#8B5CF6'],
   });
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
         keyboardVerticalOffset={0}
       >
-        {/* Deep space gradient background */}
         <LinearGradient
           colors={['#0D0618', '#1A0B2E', '#2D1255', '#3D1A6E']}
           style={styles.background}
           start={{ x: 0.1, y: 0 }}
           end={{ x: 0.9, y: 1 }}
         >
-          {/* Star field dots */}
+          {/* Star field */}
           <View style={styles.starField} pointerEvents="none">
             {[...Array(28)].map((_, i) => (
               <View
@@ -356,7 +282,7 @@ export default function LoginScreen() {
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
-            {/* Hero section */}
+            {/* Hero section — hidden when keyboard is open */}
             {!isKeyboardVisible && (
               <Animated.View
                 style={[
@@ -364,24 +290,12 @@ export default function LoginScreen() {
                   { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
                 ]}
               >
-                <TouchableOpacity
-                  style={styles.backButton}
-                  onPress={() => router.back()}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.backButtonInner}>
-                    <MaterialIcons name="arrow-back" size={20} color="#E0D4FF" />
-                  </View>
-                </TouchableOpacity>
-
-                {/* Glow orb behind logo */}
                 <View style={styles.logoGlow} />
                 <Image
                   source={require('../../assets/images/logo.png')}
                   style={styles.heroLogo}
                   resizeMode="contain"
                 />
-
                 <Text style={styles.heroTitle}>Welcome Back</Text>
                 <Text style={styles.heroSubtitle}>Your stars have been waiting ✦</Text>
               </Animated.View>
@@ -394,7 +308,6 @@ export default function LoginScreen() {
                 { transform: [{ translateY: cardSlideAnim }], opacity: fadeAnim },
               ]}
             >
-              {/* Card top accent line */}
               <LinearGradient
                 colors={['#7C3AED', '#A855F7', '#EC4899']}
                 style={styles.cardAccentLine}
@@ -403,14 +316,11 @@ export default function LoginScreen() {
               />
 
               <View style={styles.cardContent}>
-                <Text style={styles.cardTitle}>Sign In</Text>
+                <Text style={styles.cardTitle}>Login</Text>
                 <Text style={styles.cardSubtitle}>Enter your phone number to continue</Text>
 
                 {/* Phone input */}
                 <Animated.View style={[styles.inputContainer, { borderColor }]}>
-                  <View style={styles.phoneIconWrap}>
-                    <MaterialIcons name="phone" size={17} color="#9B72CF" />
-                  </View>
                   <CountryCodePicker
                     selectedCountry={selectedCountry}
                     onSelect={setSelectedCountry}
@@ -423,7 +333,7 @@ export default function LoginScreen() {
                       if (digitsOnly.length <= 10) setPhoneNumber(digitsOnly);
                     }}
                     placeholder="Phone number"
-                    placeholderTextColor="#B0A0C8"
+                    placeholderTextColor="rgba(255,255,255,0.3)"
                     style={styles.input}
                     keyboardType="number-pad"
                     autoCapitalize="none"
@@ -437,27 +347,25 @@ export default function LoginScreen() {
                       style={styles.clearButton}
                       hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                     >
-                      <MaterialIcons name="cancel" size={18} color="#B0A0C8" />
+                      <MaterialIcons name="cancel" size={18} color="rgba(255,255,255,0.3)" />
                     </TouchableOpacity>
                   )}
                 </Animated.View>
 
-                {/* Number length hint */}
-                <Text style={styles.inputHint}>
-                  {phoneNumber.length > 0
-                    ? `${phoneNumber.length}/10 digits entered`
-                    : `${selectedCountry.flag} ${selectedCountry.name} (${selectedCountry.dialCode})`}
-                </Text>
+                {/* Digit counter — only shown while typing */}
+                {phoneNumber.length > 0 && (
+                  <Text style={styles.digitCount}>{phoneNumber.length}/10</Text>
+                )}
 
                 {/* OTP Button */}
                 <TouchableOpacity
-                  onPress={onGenerateOTP}
+                  onPress={handleGenerateOTP}
                   activeOpacity={0.85}
                   disabled={loading}
-                  style={styles.otpButtonWrapper}
+                  style={[styles.otpButtonWrapper, phoneNumber.length === 0 && styles.otpButtonDisabled]}
                 >
                   <LinearGradient
-                    colors={loading ? ['#6B6B8A', '#6B6B8A'] : ['#6D28D9', '#7C3AED', '#9333EA']}
+                    colors={loading ? ['#3D2A6E', '#3D2A6E'] : ['#6D28D9', '#7C3AED', '#9333EA']}
                     style={styles.otpButton}
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 0 }}
@@ -466,7 +374,7 @@ export default function LoginScreen() {
                       <ActivityIndicator color="#fff" size="small" />
                     ) : (
                       <>
-                        <MaterialIcons name="send" size={18} color="#fff" style={{ marginRight: 8 }} />
+                        <MaterialIcons name="send" size={17} color="#fff" style={{ marginRight: 8 }} />
                         <Text style={styles.otpButtonText}>Send OTP</Text>
                       </>
                     )}
@@ -525,180 +433,167 @@ const styles = StyleSheet.create({
 
   // Hero
   heroSection: {
-    paddingTop: 20,
-    paddingBottom: 32,
+    paddingTop: 70,
+    paddingBottom: 36,
     alignItems: 'center',
     paddingHorizontal: 24,
   },
-  backButton: {
-    position: 'absolute',
-    top: 20,
-    left: 20,
-    zIndex: 10,
-  },
-  backButtonInner: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   logoGlow: {
     position: 'absolute',
-    width: 120,
-    height: 120,
-    borderRadius: 60,
+    width: 110,
+    height: 110,
+    borderRadius: 55,
     backgroundColor: '#7C3AED',
-    opacity: 0.18,
-    top: 50,
+    opacity: 0.15,
+    top: 78,
     alignSelf: 'center',
   },
   heroLogo: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
-    marginTop: 16,
-    marginBottom: 20,
-    borderWidth: 2,
-    borderColor: 'rgba(167,139,250,0.4)',
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    marginBottom: 22,
+    borderWidth: 1.5,
+    borderColor: 'rgba(167,139,250,0.35)',
   },
   heroTitle: {
-    fontSize: 34,
-    fontWeight: '800',
+    fontSize: 32,
+    fontWeight: '700',
     color: '#F3EEFF',
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
     marginBottom: 8,
     textAlign: 'center',
   },
   heroSubtitle: {
-    fontSize: 15,
-    color: '#C4A8F0',
+    fontSize: 14,
+    color: '#9B7DC8',
     textAlign: 'center',
-    opacity: 0.9,
-    letterSpacing: 0.2,
+    letterSpacing: 0.3,
   },
 
-  // Card
+  // Card — dark glass style
   card: {
     width: '100%',
-    backgroundColor: '#FDFBFF',
-    borderTopLeftRadius: 36,
-    borderTopRightRadius: 36,
+    backgroundColor: '#130826',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
     overflow: 'hidden',
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: 'rgba(124,58,237,0.2)',
     shadowColor: '#4B0082',
-    shadowOpacity: 0.25,
-    shadowOffset: { width: 0, height: -6 },
-    shadowRadius: 24,
-    elevation: 16,
+    shadowOpacity: 0.4,
+    shadowOffset: { width: 0, height: -8 },
+    shadowRadius: 28,
+    elevation: 20,
   },
   cardAccentLine: {
-    height: 4,
+    height: 3,
     width: '100%',
+    opacity: 0.9,
   },
   cardContent: {
-    paddingTop: 32,
+    paddingTop: 30,
     paddingBottom: 44,
     paddingHorizontal: 28,
   },
   cardTitle: {
-    fontSize: 30,
-    fontWeight: '800',
-    color: '#1A0B2E',
-    marginBottom: 6,
-    letterSpacing: 0.2,
+    fontSize: 26,
+    fontWeight: '700',
+    color: '#EDE8FF',
+    marginBottom: 5,
+    letterSpacing: 0.1,
   },
   cardSubtitle: {
-    fontSize: 14,
-    color: '#8B7BAE',
-    marginBottom: 28,
-    letterSpacing: 0.1,
+    fontSize: 13,
+    color: '#6B5A8A',
+    marginBottom: 26,
+    letterSpacing: 0.2,
   },
 
   // Input
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F7F3FF',
-    borderRadius: 18,
-    borderWidth: 1.5,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 12,
+    borderWidth: 1,
     paddingHorizontal: 14,
-    paddingVertical: 4,
-    marginBottom: 8,
-  },
-  phoneIconWrap: {
-    width: 26,
-    alignItems: 'center',
-    marginRight: 6,
+    paddingVertical: 2,
+    marginBottom: 6,
   },
   inputDivider: {
     width: 1,
-    height: 22,
-    backgroundColor: '#DDD4F0',
+    height: 20,
+    backgroundColor: 'rgba(255,255,255,0.08)',
     marginHorizontal: 10,
   },
   input: {
     flex: 1,
-    color: '#1A0B2E',
-    fontSize: 16,
+    color: '#EDE8FF',
+    fontSize: 15,
     fontWeight: '500',
-    paddingVertical: 14,
-    letterSpacing: 0.5,
+    paddingVertical: 15,
+    letterSpacing: 0.8,
   },
   clearButton: {
     padding: 4,
     marginLeft: 4,
   },
-  inputHint: {
-    fontSize: 12,
-    color: '#A090C0',
-    marginBottom: 24,
-    marginLeft: 4,
-    letterSpacing: 0.1,
+  digitCount: {
+    fontSize: 11,
+    color: '#6B5A8A',
+    marginBottom: 20,
+    marginLeft: 2,
+    letterSpacing: 0.5,
   },
 
   // OTP Button
   otpButtonWrapper: {
-    borderRadius: 18,
+    borderRadius: 12,
     overflow: 'hidden',
+    marginTop: 8,
     marginBottom: 24,
     shadowColor: '#7C3AED',
-    shadowOpacity: 0.35,
+    shadowOpacity: 0.4,
     shadowOffset: { width: 0, height: 4 },
-    shadowRadius: 12,
-    elevation: 6,
+    shadowRadius: 14,
+    elevation: 8,
+  },
+  otpButtonDisabled: {
+    opacity: 0.5,
   },
   otpButton: {
-    paddingVertical: 16,
+    paddingVertical: 15,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
   },
   otpButtonText: {
     color: '#FFFFFF',
-    fontWeight: '800',
-    fontSize: 17,
-    letterSpacing: 0.4,
+    fontWeight: '600',
+    fontSize: 16,
+    letterSpacing: 0.5,
   },
 
   // Divider
   dividerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 18,
   },
   dividerLine: {
     flex: 1,
     height: 1,
-    backgroundColor: '#EAE2F8',
+    backgroundColor: 'rgba(255,255,255,0.06)',
   },
   dividerText: {
-    color: '#A090C0',
-    fontSize: 13,
+    color: '#4A3A6A',
+    fontSize: 12,
     marginHorizontal: 14,
     fontWeight: '500',
+    letterSpacing: 0.5,
   },
 
   // Google
@@ -706,36 +601,31 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 12,
     paddingVertical: 14,
-    borderWidth: 1.5,
-    borderColor: '#E8E0F4',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
     marginBottom: 28,
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 6,
-    elevation: 2,
     gap: 10,
   },
   googleIconCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#F1EDFF',
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: 'rgba(66,133,244,0.12)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   googleLetter: {
-    fontSize: 15,
-    fontWeight: '800',
+    fontSize: 14,
+    fontWeight: '700',
     color: '#4285F4',
   },
   googleButtonText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#2D1255',
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#C4B4E4',
     letterSpacing: 0.2,
   },
 
@@ -746,12 +636,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   signupText: {
-    color: '#8B7BAE',
-    fontSize: 14,
+    color: '#4A3A6A',
+    fontSize: 13,
   },
   signupLink: {
-    color: '#7C3AED',
-    fontWeight: '700',
-    fontSize: 14,
+    color: '#9B72CF',
+    fontWeight: '600',
+    fontSize: 13,
   },
 });

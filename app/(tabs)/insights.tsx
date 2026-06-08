@@ -1,4 +1,4 @@
-import { getDailyHoroscope } from '@/lib/astro';
+import { getDailyHoroscope, parseTzString } from '@/lib/astro';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -68,7 +68,7 @@ export default function InsightsScreen() {
       const lon = parseFloat(birthDetails.lng);
 
       // Calculate timezone offset
-      const timezoneHours = parseFloat(birthDetails.tz.replace('UTC', '').replace('+', '')) || 0;
+      const timezoneHours = parseTzString(birthDetails.tz);
 
       const horoscopeData = await getDailyHoroscope({
         day: dob.getDate(),
@@ -562,4 +562,3 @@ const styles = StyleSheet.create({
     height: 150,
   },
 });
-

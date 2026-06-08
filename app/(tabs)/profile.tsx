@@ -4,6 +4,7 @@ import { getMembershipOrFree, getPlanCatalog, type MembershipSummary } from '@/l
 import { supabase } from '@/lib/supabase';
 import { useSubscriptionPayment } from '@/lib/useSubscriptionPayment';
 import { SubscriptionStatusBanner } from '@/components/SubscriptionStatusBanner';
+import { AstroIncompleteBanner } from '@/components/AstroIncompleteBanner';
 import { deleteUserPhoto, getUserPhotos } from '@/lib/user-photos';
 import { getUserProfile, saveUserProfile } from '@/lib/user-profile';
 import { Ionicons } from '@expo/vector-icons';
@@ -181,6 +182,7 @@ export default function ProfileScreen() {
   const [newMatchNotifications, setNewMatchNotifications] = useState(false);
   const [membership, setMembership] = useState<MembershipSummary | null>(null);
   const [membershipLoading, setMembershipLoading] = useState(false);
+  const [astroMissing, setAstroMissing] = useState(false);
   const [showAgeSetting, setShowAgeSetting] = useState(true);
   const [section1InterestValues, setSection1InterestValues] = useState<string[]>([]);
   const [locationLoading, setLocationLoading] = useState(false);
@@ -190,6 +192,8 @@ export default function ProfileScreen() {
   // ── BUG-07: subscription payment with race-condition-safe verification ──────
   const { paymentStatus, paymentError, startPayment, resetPayment } =
     useSubscriptionPayment();
+
+  const [loadingPlanId, setLoadingPlanId] = useState<string | null>(null);
 
   const [planCatalog, setPlanCatalog] = useState<
     Awaited<ReturnType<typeof getPlanCatalog>>
@@ -206,16 +210,21 @@ export default function ProfileScreen() {
       showAlert('Not Signed In', 'Please sign in to subscribe.');
       return;
     }
-    await startPayment({
-      planId,
-      planName,
-      amountPaise,
-      userId: user.id,
-      userEmail: user.email,
-    });
-    // On success, refresh membership badge
-    if (paymentStatus === 'active') {
-      fetchMembership();
+    setLoadingPlanId(planId);
+    try {
+      await startPayment({
+        planId,
+        planName,
+        amountPaise,
+        userId: user.id,
+        userEmail: user.email,
+      });
+      // On success, refresh membership badge
+      if (paymentStatus === 'active') {
+        fetchMembership();
+      }
+    } finally {
+      setLoadingPlanId(null);
     }
   };
   // ────────────────────────────────────────────────────────────────────────────
@@ -405,6 +414,11 @@ export default function ProfileScreen() {
         }));
         // Set vedic sign from indian_sign
         setVedicSign(astro.indian_sign || '');
+        // Astro row exists but chart was never computed (API failed at signup)
+        setAstroMissing(!astro.western_sign && !astro.indian_sign);
+      } else {
+        // No row at all — also missing
+        setAstroMissing(true);
       }
 
       // Process section1 responses (interests, looking_for, hobbies, height, etc.)
@@ -913,6 +927,16 @@ export default function ProfileScreen() {
 
 
 
+        {/* Astro incomplete banner — shown when chart computation failed at signup */}
+        {astroMissing && !loading && (
+          <AstroIncompleteBanner
+            onSuccess={() => {
+              setAstroMissing(false);
+              fetchUserData();
+            }}
+          />
+        )}
+
         {/* Profile Completion CTA */}
         {profileCompletion < 100 && (
           <TouchableOpacity onPress={() => setShowEditModal(true)} activeOpacity={0.8} style={styles.completionContainer}>
@@ -1039,6 +1063,24 @@ export default function ProfileScreen() {
             </BlurView>
           ) : null}
 
+          {/* Cosmic Insights Button */}
+          <TouchableOpacity
+            onPress={() => router.push('/cosmic-insights' as any)}
+            activeOpacity={0.8}
+          >
+            <BlurView intensity={20} tint="dark" style={styles.cosmicInsightsBtn}>
+              <LinearGradient
+                colors={['rgba(139,92,246,0.25)', 'rgba(168,85,247,0.15)']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.cosmicInsightsBtnInner}
+              >
+                <Text style={styles.cosmicInsightsBtnText}>✨  My Cosmic Insights</Text>
+                <Ionicons name="chevron-forward" size={18} color="#C4B5FD" />
+              </LinearGradient>
+            </BlurView>
+          </TouchableOpacity>
+
           {/* Basic Info */}
           <BlurView intensity={20} tint="dark" style={styles.awesomeCard}>
             <View style={styles.cardHeader}>
@@ -1152,8 +1194,7 @@ export default function ProfileScreen() {
                   plan.interval === 'monthly' ? '/ month' :
                   plan.interval === 'annual'  ? '/ year'  :
                   plan.interval === 'lifetime' ? 'one-time' : '';
-                const isThisPlanLoading =
-                  (paymentStatus === 'creating' || paymentStatus === 'browser' || paymentStatus === 'pending');
+                const isThisPlanLoading = loadingPlanId === plan.id;
 
                 return (
                   <View
@@ -3145,6 +3186,25 @@ const styles = StyleSheet.create({
   pickerOptionTextSelected: {
     color: '#FFFFFF',
     fontWeight: '600',
+  },
+  cosmicInsightsBtn: {
+    borderRadius: 18,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.4)',
+  },
+  cosmicInsightsBtnInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+  },
+  cosmicInsightsBtnText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#C4B5FD',
+    letterSpacing: 0.3,
   },
   // Awesome UI Styles
   awesomeCard: {

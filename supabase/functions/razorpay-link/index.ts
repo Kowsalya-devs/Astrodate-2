@@ -1,8 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.6";
 
-// Required secrets: RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
-
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -34,11 +32,11 @@ serve(async (req) => {
       });
     }
 
+    // Verify the user JWT
     const supabaseClient = createClient(supabaseUrl, supabaseServiceKey, {
       auth: { persistSession: false },
       global: { headers: { Authorization: authHeader } }
     });
-
     const { data: { user }, error: userError } = await supabaseClient.auth.getUser();
     if (userError || !user) {
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {
@@ -58,6 +56,45 @@ serve(async (req) => {
       });
     }
 
+    // --- FIX: adminClient is created FIRST, before the Razorpay call ---
+    // This lets us validate planId exists before creating a payment link
+    // we can't record, and gives a clean error instead of FK violation.
+    const adminClient = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: { persistSession: false },
+    });
+
+    // Validate that planId exists in plan_catalog BEFORE hitting Razorpay
+    const { data: planRow, error: planLookupError } = await adminClient
+      .from('plan_catalog')
+      .select('id, plan_slug, plan_name, amount_paise, is_active')
+      .eq('id', planId)
+      .single();
+
+    console.log('plan lookup:', JSON.stringify({ planId, planRow, planLookupError }));
+
+    if (planLookupError || !planRow) {
+      console.error('plan_id not found in plan_catalog:', planId);
+      return new Response(JSON.stringify({
+        error: 'Invalid plan',
+        detail: `plan_id ${planId} not found in plan_catalog`,
+      }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    if (!planRow.is_active) {
+      return new Response(JSON.stringify({ error: 'Plan is not active' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Use the DB-authoritative amount, not the client-supplied one
+    // (prevents price tampering)
+    const verifiedAmountPaise = planRow.amount_paise;
+    const verifiedPlanName = planRow.plan_name;
+
     const basicAuth = btoa(`${keyId}:${keySecret}`);
     const razorpayRes = await fetch('https://api.razorpay.com/v1/payment_links', {
       method: 'POST',
@@ -66,10 +103,10 @@ serve(async (req) => {
         'Authorization': `Basic ${basicAuth}`
       },
       body: JSON.stringify({
-        amount: amountPaise,
+        amount: verifiedAmountPaise,
         currency: currency ?? 'INR',
         accept_partial: false,
-        description: `AstroDate ${planName || ''} Plan`,
+        description: `AstroDate ${verifiedPlanName} Plan`,
         customer: { name: userName ?? '', email: userEmail ?? '', contact: userPhone ?? '' },
         notify: { sms: !!userPhone, email: !!userEmail },
         reminder_enable: true,
@@ -90,10 +127,6 @@ serve(async (req) => {
 
     const data = await razorpayRes.json();
 
-    const adminClient = createClient(supabaseUrl, supabaseServiceKey, {
-      auth: { persistSession: false },
-    });
-
     const { error: insertError } = await adminClient
       .from('user_subscriptions')
       .insert({
@@ -104,8 +137,8 @@ serve(async (req) => {
       });
 
     if (insertError) {
-      console.error('Failed to insert user subscription:', insertError);
-      return new Response(JSON.stringify({ error: 'Database Error' }), {
+      console.error('Failed to insert user subscription:', JSON.stringify(insertError));
+      return new Response(JSON.stringify({ error: 'Database Error', detail: insertError.message, code: insertError.code }), {
         status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });

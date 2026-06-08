@@ -110,15 +110,15 @@ export default function NotificationsScreen() {
           let senderName = null;
           if (senderId) {
             try {
-              const [photoRes, profileRes] = await Promise.all([
+              const [photoRes, nameRes] = await Promise.all([
                 getUserPhotos(senderId),
-                supabase.from('user_profiles').select('full_name').eq('user_id', senderId).maybeSingle(),
+                supabase.rpc('get_user_display_name', { p_target_user_id: senderId }),
               ]);
               if (photoRes.success && photoRes.data?.length) {
                 const primary = photoRes.data.find((p: any) => p.is_primary) || photoRes.data[0];
                 senderPhoto = primary?.photo_url ?? null;
               }
-              senderName = profileRes.data?.full_name ?? null;
+              senderName = nameRes.data?.[0]?.full_name ?? null;
             } catch { /* ignore */ }
           }
           return { ...n, senderPhoto, senderName };
@@ -160,15 +160,15 @@ export default function NotificationsScreen() {
         let senderPhoto = null;
         let senderName = null;
         try {
-          const [photoRes, profileRes] = await Promise.all([
+          const [photoRes, nameRes] = await Promise.all([
             getUserPhotos(otherId),
-            supabase.from('user_profiles').select('full_name').eq('user_id', otherId).maybeSingle(),
+            supabase.rpc('get_user_display_name', { p_target_user_id: otherId }),
           ]);
           if (photoRes.success && photoRes.data?.length) {
             const primary = photoRes.data.find((p: any) => p.is_primary) || photoRes.data[0];
             senderPhoto = primary?.photo_url ?? null;
           }
-          senderName = profileRes.data?.full_name ?? null;
+          senderName = nameRes.data?.[0]?.full_name ?? null;
         } catch { /* ignore */ }
 
         items.push({
@@ -190,15 +190,15 @@ export default function NotificationsScreen() {
         let senderPhoto = null;
         let senderName = null;
         try {
-          const [photoRes, profileRes] = await Promise.all([
+          const [photoRes, nameRes] = await Promise.all([
             getUserPhotos(l.user_id),
-            supabase.from('user_profiles').select('full_name').eq('user_id', l.user_id).maybeSingle(),
+            supabase.rpc('get_user_display_name', { p_target_user_id: l.user_id }),
           ]);
           if (photoRes.success && photoRes.data?.length) {
             const primary = photoRes.data.find((p: any) => p.is_primary) || photoRes.data[0];
             senderPhoto = primary?.photo_url ?? null;
           }
-          senderName = profileRes.data?.full_name ?? null;
+          senderName = nameRes.data?.[0]?.full_name ?? null;
         } catch { /* ignore */ }
 
         items.push({
@@ -345,15 +345,8 @@ export default function NotificationsScreen() {
           </View>
           {unreadCount > 0 && (
             <TouchableOpacity
-              onPress={async () => {
+              onPress={() => {
                 setReadIds(new Set(notifications.map(n => n.id)));
-                const { data: { user } } = await supabase.auth.getUser();
-                if (user) {
-                  await (supabase.from('push_notifications' as any) as any)
-                    .update({ status: 'read' })
-                    .eq('user_id', user.id)
-                    .eq('status', 'delivered');
-                }
               }}
               style={styles.markAllBtn}
             >

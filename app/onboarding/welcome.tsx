@@ -1,7 +1,6 @@
-import { useNavigation } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import React, { useEffect } from 'react';
+import React from 'react';
 import { Dimensions, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -9,11 +8,6 @@ const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 export default function WelcomeScreen() {
   const router = useRouter();
-  const navigation: any = useNavigation();
-
-  useEffect(() => {
-    navigation.setOptions({ headerShown: false });
-  }, [navigation]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -50,20 +44,12 @@ export default function WelcomeScreen() {
             </View>
             
             <View style={styles.buttonContainer}>
-              <TouchableOpacity 
-                style={styles.signUpButton}
+              <TouchableOpacity
+                style={styles.getStartedButton}
                 onPress={() => router.push('/onboarding/signup')}
-                activeOpacity={0.8}
+                activeOpacity={0.85}
               >
-                <Text style={styles.signUpButtonText}>Sign Up</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={styles.loginButton}
-                onPress={() => router.push('/onboarding/login')}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.loginButtonText}>Log In</Text>
+                <Text style={styles.getStartedButtonText}>Get Started ✦</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -141,31 +127,25 @@ const styles = StyleSheet.create({
     opacity: 0.9,
   },
   buttonContainer: {
-    gap: 12,
+    gap: 16,
     marginTop: 20,
   },
-  loginButton: {
-    backgroundColor: '#000000',
+  getStartedButton: {
+    backgroundColor: '#A855F7',
     borderRadius: 14,
-    paddingVertical: 14,
+    paddingVertical: 16,
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#7C3AED',
+    shadowOpacity: 0.45,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 12,
+    elevation: 6,
   },
-  loginButtonText: {
+  getStartedButtonText: {
     color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  signUpButton: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    paddingVertical: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  signUpButtonText: {
-    color: '#000000',
-    fontSize: 16,
-    fontWeight: '700',
+    fontSize: 17,
+    fontWeight: '800',
+    letterSpacing: 0.3,
   },
 });

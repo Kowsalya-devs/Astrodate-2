@@ -49,6 +49,10 @@ export default function FiltersScreen() {
   const [sexualOrientation, setSexualOrientation] = useState<string>('Select');
   const [newMatchNotifications, setNewMatchNotifications] = useState<boolean>(true); // discovery notification toggle
 
+  // Astro preference filters
+  const [preferredElements, setPreferredElements] = useState<string[]>([]);
+  const [blockedSigns, setBlockedSigns] = useState<string[]>([]);
+
   // Inline editor dialog state (we now expand sections inline)
   const [expandedSection, setExpandedSection] = useState<'location' | 'gender' | 'sexual_orientation' | 'age' | 'distance' | null>(null);
   const [tempLocation, setTempLocation] = useState<string>('');
@@ -190,6 +194,8 @@ export default function FiltersScreen() {
         max_age: maxAge,
         max_distance: maxDistance,
         new_match_notifications: newMatchNotifications,
+        preferred_elements: preferredElements,
+        blocked_signs: blockedSigns,
         updated_at: new Date().toISOString(),
       };
 
@@ -415,6 +421,9 @@ export default function FiltersScreen() {
         setMaxDistance(loadedDistance);
         setNewMatchNotifications(loadedNewMatchNotifications);
 
+        setPreferredElements(Array.isArray(data.preferred_elements) ? data.preferred_elements : []);
+        setBlockedSigns(Array.isArray(data.blocked_signs) ? data.blocked_signs : []);
+
         setLocation(data.location || '');
         setSexualOrientation(data.sexual_orientation || 'Select');
         setGenderPreferenceLabel(data.gender_preference || 'Select');
@@ -512,6 +521,8 @@ export default function FiltersScreen() {
         gender_preference: genderPreferenceLabel && genderPreferenceLabel !== 'Select' ? genderPreferenceLabel : null,
         sexual_orientation: sexualOrientation && sexualOrientation !== 'Select' ? sexualOrientation : null,
         new_match_notifications: newMatchNotifications,
+        preferred_elements: preferredElements,
+        blocked_signs: blockedSigns,
         updated_at: new Date().toISOString(),
       };
 
@@ -1164,6 +1175,118 @@ export default function FiltersScreen() {
 
 
 
+          {/* ── Element Affinity ─────────────────────────────────────────── */}
+          <View style={styles.menuCard}>
+            <View style={styles.menuRowInner}>
+              <View style={styles.menuLeft}>
+                <View style={styles.menuIcon}>
+                  <MaterialIcons name="whatshot" size={18} color="#FFFFFF" />
+                </View>
+                <View style={styles.menuContent}>
+                  <Text style={styles.menuTitle}>Element Affinity</Text>
+                  <Text style={styles.menuSubtitle}>
+                    {preferredElements.length === 0
+                      ? 'Show all elements'
+                      : preferredElements.join(', ')}
+                  </Text>
+                </View>
+              </View>
+              {preferredElements.length > 0 && (
+                <TouchableOpacity onPress={() => setPreferredElements([])} activeOpacity={0.7}>
+                  <Text style={styles.resetButtonText}>Clear</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            <View style={styles.chipRow}>
+              {[
+                { label: '🔥 Fire', value: 'Fire' },
+                { label: '🌍 Earth', value: 'Earth' },
+                { label: '💨 Air', value: 'Air' },
+                { label: '💧 Water', value: 'Water' },
+              ].map((el) => {
+                const active = preferredElements.includes(el.value);
+                return (
+                  <TouchableOpacity
+                    key={el.value}
+                    style={[styles.chip, active && styles.chipActive]}
+                    activeOpacity={0.75}
+                    onPress={() => {
+                      setPreferredElements(
+                        active
+                          ? preferredElements.filter((e) => e !== el.value)
+                          : [...preferredElements, el.value]
+                      );
+                    }}
+                  >
+                    <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                      {el.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+
+          {/* ── Sign Blocker ──────────────────────────────────────────────── */}
+          <View style={styles.menuCard}>
+            <View style={styles.menuRowInner}>
+              <View style={styles.menuLeft}>
+                <View style={styles.menuIcon}>
+                  <MaterialIcons name="block" size={18} color="#FFFFFF" />
+                </View>
+                <View style={styles.menuContent}>
+                  <Text style={styles.menuTitle}>Block Signs</Text>
+                  <Text style={styles.menuSubtitle}>
+                    {blockedSigns.length === 0
+                      ? 'No signs blocked'
+                      : `${blockedSigns.length} sign${blockedSigns.length > 1 ? 's' : ''} blocked`}
+                  </Text>
+                </View>
+              </View>
+              {blockedSigns.length > 0 && (
+                <TouchableOpacity onPress={() => setBlockedSigns([])} activeOpacity={0.7}>
+                  <Text style={styles.resetButtonText}>Clear</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            <View style={styles.chipRow}>
+              {[
+                { label: '♈ Aries',       value: 'Aries' },
+                { label: '♉ Taurus',      value: 'Taurus' },
+                { label: '♊ Gemini',      value: 'Gemini' },
+                { label: '♋ Cancer',      value: 'Cancer' },
+                { label: '♌ Leo',         value: 'Leo' },
+                { label: '♍ Virgo',       value: 'Virgo' },
+                { label: '♎ Libra',       value: 'Libra' },
+                { label: '♏ Scorpio',     value: 'Scorpio' },
+                { label: '♐ Sagittarius', value: 'Sagittarius' },
+                { label: '♑ Capricorn',   value: 'Capricorn' },
+                { label: '♒ Aquarius',    value: 'Aquarius' },
+                { label: '♓ Pisces',      value: 'Pisces' },
+              ].map((sign) => {
+                const blocked = blockedSigns.includes(sign.value);
+                return (
+                  <TouchableOpacity
+                    key={sign.value}
+                    style={[styles.chip, blocked && styles.chipBlocked]}
+                    activeOpacity={0.75}
+                    onPress={() => {
+                      setBlockedSigns(
+                        blocked
+                          ? blockedSigns.filter((s) => s !== sign.value)
+                          : [...blockedSigns, sign.value]
+                      );
+                    }}
+                  >
+                    <Text style={[styles.chipText, blocked && styles.chipTextBlocked]}>
+                      {sign.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+
           <View style={styles.menuRow}>
             <View style={styles.menuLeft}>
               <View style={styles.menuIcon}><MaterialIcons name="notifications" size={18} color="#FFFFFF" /></View>
@@ -1752,6 +1875,44 @@ const styles = StyleSheet.create({
   },
   expandedSaveText: {
     color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  // ── Astro filter chips ──────────────────────────────────────────────────
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    paddingHorizontal: 4,
+    paddingTop: 8,
+    paddingBottom: 4,
+  },
+  chip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+  chipActive: {
+    backgroundColor: 'rgba(124,58,237,0.35)',
+    borderColor: '#A855F7',
+  },
+  chipBlocked: {
+    backgroundColor: 'rgba(220,38,38,0.25)',
+    borderColor: '#F87171',
+  },
+  chipText: {
+    color: 'rgba(255,255,255,0.75)',
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  chipTextActive: {
+    color: '#E9D5FF',
+    fontWeight: '700',
+  },
+  chipTextBlocked: {
+    color: '#FCA5A5',
     fontWeight: '700',
   },
 });

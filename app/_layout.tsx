@@ -197,7 +197,7 @@ export default function RootLayout() {
   }, []); // EMPTY DEPS — must never be changed
 
   useEffect(() => {
-    const responseListener = Notifications.addNotificationResponseReceivedListener((response) => {
+    const responseListener = Notifications.addNotificationResponseReceivedListener((response: { notification: { request: { content: { data: any; }; }; }; }) => {
       const data = response.notification.request.content.data as any;
       if (data?.type === 'new_message' && data?.chat_id) {
         router.push({
@@ -401,6 +401,9 @@ export default function RootLayout() {
             <Stack.Screen name="filters" options={{ headerShown: false }} />
             <Stack.Screen name="settings" options={{ headerShown: false }} />
             <Stack.Screen name="help" options={{ headerShown: false }} />
+            <Stack.Screen name="cosmic-insights" options={{ headerShown: false, animation: 'slide_from_bottom' }} />
+            <Stack.Screen name="privacy" options={{ headerShown: false }} />
+            <Stack.Screen name="terms" options={{ headerShown: false }} />
           </Stack>
 
           {/* Global alert modal — survives all navigation */}

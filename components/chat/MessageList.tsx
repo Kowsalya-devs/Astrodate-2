@@ -1,84 +1,157 @@
 import React, { forwardRef, useCallback, useImperativeHandle, useMemo, useRef } from 'react';
-import { FlatList, Platform, StyleSheet, View } from 'react-native';
+import { FlatList, Platform, StyleSheet, Text, View } from 'react-native';
 import { EmptyChatState } from './EmptyChatState';
 import { MessageBubble } from './MessageBubble';
 
 type Message = {
-  id: string;
-  text: string;
-  senderId: string;
-  timestamp: Date;
-  isRead: boolean;
+  id: string; text: string; senderId: string; timestamp: Date;
+  isRead?: boolean; isOptimistic?: boolean; isFailed?: boolean;
 };
 
+type ListItem =
+  | { type: 'message'; data: Message }
+  | { type: 'date_divider'; label: string }
+  | { type: 'unread_divider' };
+
 interface MessageListProps {
-  messages: Message[];
-  currentUserId: string;
-  avatar?: { uri: string };
-  icebreaker?: string | null;
-  icebreakerDismissed?: boolean;
-  onUseIcebreaker: () => void;
-  onDismissIcebreaker: () => void;
-  contentContainerStyle?: any;
-  onAtBottomChange?: (isAtBottom: boolean) => void;
+  messages: Message[]; currentUserId: string; avatar?: { uri: string };
+  icebreaker?: string | null; icebreakerDismissed?: boolean;
+  onUseIcebreaker: () => void; onDismissIcebreaker: () => void;
+  contentContainerStyle?: any; onAtBottomChange?: (isAtBottom: boolean) => void;
+  onRetry?: (message: Message) => void;
 }
 
 export interface MessageListRef {
   scrollToStart: (animated?: boolean) => void;
 }
 
-export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
-  messages,
-  currentUserId,
-  avatar,
-  icebreaker,
-  icebreakerDismissed,
-  onUseIcebreaker,
-  onDismissIcebreaker,
-  contentContainerStyle,
-  onAtBottomChange,
-}, ref) => {
+// ─── Date label helper ────────────────────────────────────────────────────────
+function getDateLabel(date: Date): string {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+  const msgDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  if (msgDay.getTime() === today.getTime()) return 'Today';
+  if (msgDay.getTime() === yesterday.getTime()) return 'Yesterday';
+  return date.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+}
+
+function buildListItems(messages: Message[], currentUserId: string): ListItem[] {
+  if (messages.length === 0) return [];
+
+  const sorted = [...messages].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+
+  const firstUnreadIdx = sorted.findLastIndex(
+    (m) => m.senderId !== currentUserId && !m.isRead
+  );
+
+  const items: ListItem[] = [];
+
+  sorted.forEach((msg, i) => {
+    items.push({ type: 'message', data: msg });
+
+    if (i === firstUnreadIdx && firstUnreadIdx !== sorted.length - 1) {
+      items.push({ type: 'unread_divider' });
+    }
+
+    // Date divider — in inverted list the date appears *above* the messages of that day
+    // by pushing it *after* we finish processing the messages for that date
+    const nextMsg = sorted[i + 1];
+    const currentDateLabel = getDateLabel(msg.timestamp);
+    const nextDateLabel = nextMsg ? getDateLabel(nextMsg.timestamp) : null;
+    
+    if (currentDateLabel !== nextDateLabel) {
+      items.push({ type: 'date_divider', label: currentDateLabel });
+    }
+  });
+
+  return items;
+}
+
+// ─── Check if consecutive messages are from same sender ──────────────────────
+function isSameGroup(items: ListItem[], idx: number): { top: boolean; bottom: boolean } {
+  const current = items[idx];
+  if (current.type !== 'message') return { top: false, bottom: false };
+
+  const prev = items[idx - 1];
+  const next = items[idx + 1];
+
+  const sameAsPrev = prev?.type === 'message' && prev.data.senderId === current.data.senderId;
+  const sameAsNext = next?.type === 'message' && next.data.senderId === current.data.senderId;
+
+  return { top: sameAsPrev, bottom: sameAsNext };
+}
+
+export const MessageList = forwardRef<MessageListRef, MessageListProps>((
+  { messages, currentUserId, avatar, icebreaker, icebreakerDismissed,
+    onUseIcebreaker, onDismissIcebreaker, contentContainerStyle, onAtBottomChange, onRetry },
+  ref
+) => {
   const flatListRef = useRef<FlatList>(null);
 
   useImperativeHandle(ref, () => ({
-    scrollToStart: (animated: boolean = true) => {
-      flatListRef.current?.scrollToOffset({ offset: 0, animated });
-    },
+    scrollToStart: (animated = true) => flatListRef.current?.scrollToOffset({ offset: 0, animated }),
   }));
 
   const handleScroll = useCallback((event: any) => {
     if (!onAtBottomChange) return;
-    const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
-    // Since list is inverted, distanceFromTop = distanceFromNewestMessages
-    const distanceFromTop = contentOffset.y;
-    onAtBottomChange(distanceFromTop < 80);
+    onAtBottomChange(event.nativeEvent.contentOffset.y < 80);
   }, [onAtBottomChange]);
 
-  const renderItem = useCallback(({ item }: { item: Message }) => (
-    <View style={styles.messageItem}>
-      <MessageBubble
-        message={item}
-        currentUserId={currentUserId}
-        avatar={avatar}
-      />
-    </View>
-  ), [currentUserId, avatar]);
+  const listItems = useMemo(() => buildListItems(messages, currentUserId), [messages, currentUserId]);
 
-  const keyExtractor = useCallback((item: Message) => `msg-${item.id}`, []);
+  const renderItem = useCallback(({ item, index }: { item: ListItem; index: number }) => {
+    if (item.type === 'date_divider') {
+      return (
+        <View style={styles.dateDivider}>
+          <View style={styles.dateLine} />
+          <Text style={styles.dateText}>{item.label}</Text>
+          <View style={styles.dateLine} />
+        </View>
+      );
+    }
+    if (item.type === 'unread_divider') {
+      return (
+        <View style={styles.unreadDivider}>
+          <View style={styles.unreadLine} />
+          <Text style={styles.unreadText}>New messages</Text>
+          <View style={styles.unreadLine} />
+        </View>
+      );
+    }
+
+    const { top: sameAbove, bottom: sameBelow } = isSameGroup(listItems, index);
+    const isMyMessage = item.data.senderId === currentUserId;
+    // Tighten vertical gap for consecutive same-sender messages
+    const marginBottom = sameAbove ? 2 : 8;
+
+    return (
+      <View style={[styles.messageItem, { marginBottom }]}>
+        <MessageBubble
+          message={item.data}
+          currentUserId={currentUserId}
+          avatar={!sameAbove ? avatar : undefined}
+          onRetry={onRetry}
+        />
+      </View>
+    );
+  }, [currentUserId, avatar, onRetry, listItems]);
+
+  const keyExtractor = useCallback((item: ListItem, index: number) => {
+    if (item.type === 'date_divider') return `date-${item.label}-${index}`;
+    if (item.type === 'unread_divider') return 'unread_divider';
+    return `msg-${item.data.id}`;
+  }, []);
 
   const ListEmptyComponent = useMemo(() => (
-    <EmptyChatState
-      icebreaker={icebreaker}
-      dismissed={icebreakerDismissed}
-      onUseIcebreaker={onUseIcebreaker}
-      onDismissIcebreaker={onDismissIcebreaker}
-    />
+    <EmptyChatState icebreaker={icebreaker} dismissed={icebreakerDismissed}
+      onUseIcebreaker={onUseIcebreaker} onDismissIcebreaker={onDismissIcebreaker} />
   ), [icebreaker, icebreakerDismissed, onUseIcebreaker, onDismissIcebreaker]);
 
   return (
     <FlatList
       ref={flatListRef}
-      data={messages}
+      data={listItems}
       renderItem={renderItem}
       keyExtractor={keyExtractor}
       ListEmptyComponent={messages.length === 0 ? ListEmptyComponent : null}
@@ -87,30 +160,41 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(({
       keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
       removeClippedSubviews={Platform.OS === 'android'}
       onScroll={onAtBottomChange ? handleScroll : undefined}
-      scrollEventThrottle={onAtBottomChange ? 100 : undefined}
+      scrollEventThrottle={onAtBottomChange ? 80 : undefined}
       overScrollMode="never"
       style={styles.container}
-      maxToRenderPerBatch={10}
-      windowSize={10}
-      initialNumToRender={10}
-      inverted={true}
+      maxToRenderPerBatch={15}
+      windowSize={12}
+      initialNumToRender={20}
+      inverted
       scrollsToTop={false}
       indicatorStyle="white"
+      maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+      showsVerticalScrollIndicator={false}
     />
   );
 });
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#1A0B2E',
+  container: { flex: 1, backgroundColor: '#130820' },
+  contentContainer: { paddingHorizontal: 12, paddingTop: 14, paddingBottom: 6, backgroundColor: '#130820' },
+  messageItem: { marginBottom: 8 },
+  dateDivider: {
+    flexDirection: 'row', alignItems: 'center',
+    marginVertical: 16, marginHorizontal: 8, gap: 10,
   },
-  contentContainer: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#1A0B2E',
+  dateLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(255,255,255,0.1)' },
+  dateText: {
+    fontSize: 11, color: 'rgba(255,255,255,0.35)', fontWeight: '600',
+    letterSpacing: 0.4, textTransform: 'uppercase', paddingHorizontal: 2,
   },
-  messageItem: {
-    marginBottom: 16,
+  unreadDivider: {
+    flexDirection: 'row', alignItems: 'center',
+    marginVertical: 12, marginHorizontal: 8, gap: 10,
+  },
+  unreadLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(168,85,247,0.3)' },
+  unreadText: {
+    fontSize: 11, color: 'rgba(168,85,247,0.7)', fontWeight: '600',
+    letterSpacing: 0.4, textTransform: 'uppercase', paddingHorizontal: 2,
   },
 });

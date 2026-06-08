@@ -161,6 +161,8 @@ export type Database = {
           location: string | null;
           gender_preference: string | null;
           sexual_orientation: string | null;
+          preferred_elements: string[] | null;
+          blocked_signs: string[] | null;
           created_at: string;
           updated_at: string;
         }>;
@@ -177,6 +179,7 @@ export type Database = {
           is_read: boolean | null;
           channel_id: string | null;
           is_reported: boolean | null;
+          moderation_status: string | null;
           created_at: string | null;
         }>;
         Insert: Insert<object, Omit<Database["public"]["Tables"]["messages"]["Row"], "id" | "created_at"> & { id: string; created_at: string | null }>;
@@ -588,6 +591,14 @@ export type Database = {
       compute_personality_score: {
         Args: { user_a: string; user_b: string };
         Returns: number;
+      };
+      get_user_display_name: {
+        Args: { p_target_user_id: string };
+        Returns: { user_id: string; full_name: string }[];
+      };
+      get_users_display_info: {
+        Args: { p_target_user_ids: string[] };
+        Returns: { user_id: string; full_name: string; location: string }[];
       };
     };
     Enums: Record<string, never>;

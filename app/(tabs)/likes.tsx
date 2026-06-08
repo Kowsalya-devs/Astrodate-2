@@ -74,10 +74,7 @@ export default function LikesScreen() {
     };
 
     const [profilesRes, astroRes, photosRes] = await Promise.all([
-      supabase
-        .from('user_profiles')
-        .select('user_id, full_name, location')
-        .in('user_id', userIds),
+      supabase.rpc('get_users_display_info', { p_target_user_ids: userIds }),
       supabase
         .from('astro_details')
         .select('user_id, birth_date')
@@ -154,10 +151,7 @@ export default function LikesScreen() {
 
       // 3 parallel batch queries instead of 3×N sequential calls
       const [profilesRes, astroRes, photosRes] = await Promise.all([
-        supabase
-          .from('user_profiles')
-          .select('user_id, full_name, location')
-          .in('user_id', userIds),
+        supabase.rpc('get_users_display_info', { p_target_user_ids: userIds }),
         supabase
           .from('astro_details')
           .select('user_id, birth_date')
@@ -168,7 +162,6 @@ export default function LikesScreen() {
           .in('user_id', userIds),
       ]);
 
-      // Index results by user_id for O(1) lookup
       const profileMap: Record<string, any> = {};
       for (const p of (profilesRes.data ?? [])) profileMap[p.user_id] = p;
 

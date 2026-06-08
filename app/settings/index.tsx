@@ -9,15 +9,15 @@ import { useNavigation, useRouter } from 'expo-router';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import {
-  ActivityIndicator,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View
+    ActivityIndicator,
+    Platform,
+    ScrollView,
+    StyleSheet,
+    Switch,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -543,7 +543,7 @@ export default function SettingsScreen() {
 
 
         {/* Email & Account Security Section */}
-        {(currentEmail || emailAuthUser) && (
+        {!!(currentEmail || emailAuthUser) && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Email & Security</Text>
             <View style={styles.settingsCard}>
@@ -672,6 +672,38 @@ export default function SettingsScreen() {
           </View>
         )}
 
+        {/* Subscription Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Subscription</Text>
+          <View style={styles.settingsCard}>
+            <TouchableOpacity
+              style={[styles.settingRow, styles.settingRowLast]}
+              activeOpacity={0.7}
+              onPress={async () => {
+                try {
+                  const { data, error } = await supabase.functions.invoke('razorpay-link-status', {});
+                  if (!error && data?.status === 'active') {
+                    showAlert('Restored', 'Your subscription has been restored successfully.');
+                  } else {
+                    showAlert('Nothing to restore', 'No active subscription found for this account.');
+                  }
+                } catch {
+                  showAlert('Error', 'Could not verify subscription. Please try again.');
+                }
+              }}
+            >
+              <View style={styles.settingLeft}>
+                <MaterialIcons name="restore" size={24} color="#7C3AED" />
+                <View style={styles.settingContent}>
+                  <Text style={styles.settingTitle}>Restore purchases</Text>
+                  <Text style={styles.settingSubtitle}>Recover a previous subscription</Text>
+                </View>
+              </View>
+              <MaterialIcons name="chevron-right" size={24} color="#7C3AED" />
+            </TouchableOpacity>
+          </View>
+        </View>
+
         {/* Account Section */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account</Text>
@@ -704,7 +736,7 @@ export default function SettingsScreen() {
               <MaterialIcons name="chevron-right" size={24} color="#7C3AED" />
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.settingRow} activeOpacity={0.7} onPress={() => setActiveModal('terms')}>
+            <TouchableOpacity style={styles.settingRow} activeOpacity={0.7} onPress={() => router.push('/terms')}>
               <View style={styles.settingLeft}>
                 <MaterialIcons name="description" size={24} color="#7C3AED" />
                 <View style={styles.settingContent}>
@@ -715,7 +747,7 @@ export default function SettingsScreen() {
               <MaterialIcons name="chevron-right" size={24} color="#7C3AED" />
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.settingRow} activeOpacity={0.7} onPress={() => setActiveModal('privacyPolicy')}>
+            <TouchableOpacity style={styles.settingRow} activeOpacity={0.7} onPress={() => router.push('/privacy')}>
               <View style={styles.settingLeft}>
                 <MaterialIcons name="privacy-tip" size={24} color="#7C3AED" />
                 <View style={styles.settingContent}>

@@ -1,7 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import type { PropsWithChildren, ReactElement } from 'react';
 import { useMemo } from 'react';
-import type { NativeScrollEvent, NativeSyntheticEvent, ViewStyle } from 'react-native';
+import type { NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 import { StyleSheet, View } from 'react-native';
 import Animated, {
     interpolate,
@@ -41,22 +41,20 @@ export default function ParallaxScrollView({
   const internalScrollRef = useAnimatedRef<Animated.ScrollView>();
   const scrollRef = externalScrollRef ?? internalScrollRef;
   const scrollOffset = useScrollOffset(scrollRef);
-  const headerAnimatedStyle = useAnimatedStyle<ViewStyle>(() => {
-    const transform: NonNullable<ViewStyle['transform']> = [
-      {
-        translateY: interpolate(
-          scrollOffset.value,
-          [-HEADER_HEIGHT, 0, HEADER_HEIGHT],
-          [-HEADER_HEIGHT / 2, 0, HEADER_HEIGHT * 0.75]
-        ),
-      },
-      {
-        scale: interpolate(scrollOffset.value, [-HEADER_HEIGHT, 0, HEADER_HEIGHT], [2, 1, 1]),
-      },
-    ];
-
+  const headerAnimatedStyle = useAnimatedStyle(() => {
     return {
-      transform,
+      transform: [
+        {
+          translateY: interpolate(
+            scrollOffset.value,
+            [-HEADER_HEIGHT, 0, HEADER_HEIGHT],
+            [-HEADER_HEIGHT / 2, 0, HEADER_HEIGHT * 0.75]
+          ),
+        } as { translateY: number },
+        {
+          scale: interpolate(scrollOffset.value, [-HEADER_HEIGHT, 0, HEADER_HEIGHT], [2, 1, 1]),
+        } as { scale: number },
+      ],
     };
   });
 

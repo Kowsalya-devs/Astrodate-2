@@ -1,4 +1,4 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 // Web Crypto API is available natively in Deno
 
 // SEC-03: No CORS headers here. This endpoint is called exclusively by Razorpay's
@@ -35,7 +35,7 @@ async function sha256Hex(value: string): Promise<string> {
     .join("");
 }
 
-serve(async (req: Request) => {
+Deno.serve(async (req: Request) => {
   // Razorpay only sends POST requests — reject everything else immediately.
   // We do not handle OPTIONS/preflight because this endpoint is never called
   // from a browser (SEC-03).

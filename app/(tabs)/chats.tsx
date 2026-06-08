@@ -14,9 +14,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   AppState,
-  FlatList,
   Modal,
   RefreshControl,
+  SectionList,
   StyleSheet,
   Text,
   TextInput,
@@ -128,9 +128,11 @@ const formatTime = (date?: Date) => {
 function ChatItemComponent({
   chat,
   onLongPress,
+  isFading = false,
 }: {
   chat: ChatItem;
   onLongPress: (chat: ChatItem, event: any) => void;
+  isFading?: boolean;
 }) {
   const router = useRouter();
 
@@ -179,6 +181,11 @@ function ChatItemComponent({
             </Text>
           </View>
         )}
+        {isFading && (
+          <Text style={styles.fadingNudge}>
+            Send a message before this connection fades
+          </Text>
+        )}
       </View>
       <View style={styles.chatRight}>
         {(chat.hasConversation && chat.time) || chat.isTyping ? (
@@ -214,6 +221,7 @@ export default function ChatsScreen() {
   });
   const [onlineStatus, setOnlineStatus] = useState<Map<string, boolean>>(new Map());
   const authRetryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const authRetryCountRef = useRef(0); // must be at component level — hooks can't be called inside async callbacks
   const chatsCountRef = useRef(0);
   const chatsRef = useRef<ChatItem[]>([]);
   const isMountedRef = useRef(true);
@@ -362,7 +370,7 @@ export default function ChatsScreen() {
         const channelIdMap = new Map(
           filteredUsers
             .filter((u) => u.channel_id)
-            .map((u) => [u.user_id, u.channel_id])
+            .map((u) => [u.user_id, u.channel_id as string])
         );
 
         // Batch fetch last messages and unread counts for all users at once (much faster!)
@@ -386,7 +394,7 @@ export default function ChatsScreen() {
 
           let lastMessage = '';
           let time = '';
-          let timestamp: Date | null = null;
+          let timestamp: Date | undefined = undefined;
           let isRead = true;
           let hasConversation = false;
 
@@ -451,8 +459,8 @@ export default function ChatsScreen() {
           return timeB - timeA;
         });
 
-        // Remove timestamp from final items (not needed in UI)
-        const finalChatItems = chatItemsWithTimestamps.map(({ timestamp, ...rest }) => rest);
+        // Keep timestamp on items so the fading-connections section can use it
+        const finalChatItems = chatItemsWithTimestamps;
 
         if (isMountedRef.current) {
           setChats(finalChatItems);
@@ -462,15 +470,14 @@ export default function ChatsScreen() {
         console.error('❌ Failed to fetch users:', result.error);
 
         // On cold app start auth restoration can lag; retry instead of showing permanent empty state.
-        const authRetryCountRef = useRef(0);
+        // authRetryCountRef is declared at component level (above fetchUsers)
         const MAX_AUTH_RETRIES = 5;
 
-        // Inside fetchUsers, replace the retry logic:
         if (result.error === 'User not authenticated') {
           if (authRetryCountRef.current >= MAX_AUTH_RETRIES) {
             console.warn('[Chats] Max auth retries reached');
             authRetryCountRef.current = 0;
-            return;  // stop retrying
+            return;
           }
           authRetryCountRef.current++;
           authRetryTimeoutRef.current = setTimeout(() => {
@@ -479,7 +486,6 @@ export default function ChatsScreen() {
           return;
         }
 
-        // Reset counter on success:
         authRetryCountRef.current = 0;
 
         if (isMountedRef.current) {
@@ -802,7 +808,26 @@ export default function ChatsScreen() {
   // Separate chats into pinned and recent (use filteredChats for search)
   // Show ALL matches in the main list to prevent them from "disappearing"
   const pinnedChats = filteredChats.filter((chat) => chat.isPinned && !chat.isArchived);
-  const recentChats = filteredChats.filter((chat) => !chat.isPinned && !chat.isArchived);
+  const nonPinnedChats = filteredChats.filter((chat) => !chat.isPinned && !chat.isArchived);
+
+  const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+
+  // A chat is "fading" if it has a last message AND that message is ≥7 days old
+  const activeChats = nonPinnedChats.filter((chat) => {
+    if (!chat.hasConversation || !chat.timestamp) return true; // new match → active
+    return now - (chat.timestamp as Date).getTime() < SEVEN_DAYS_MS;
+  });
+  const fadingChats = nonPinnedChats.filter((chat) => {
+    if (!chat.hasConversation || !chat.timestamp) return false;
+    return now - (chat.timestamp as Date).getTime() >= SEVEN_DAYS_MS;
+  });
+
+  type ChatSection = { title: string; data: ChatItem[]; isFading?: boolean };
+  const sections: ChatSection[] = [];
+  if (pinnedChats.length > 0) sections.push({ title: 'Pinned', data: pinnedChats });
+  if (activeChats.length > 0) sections.push({ title: 'Messages', data: activeChats });
+  if (fadingChats.length > 0) sections.push({ title: '⏳ Fading Connections', data: fadingChats, isFading: true });
 
   const handleLongPress = (chat: ChatItem, event: any) => {
     setSelectedChat(chat);
@@ -939,14 +964,15 @@ export default function ChatsScreen() {
           </TouchableOpacity>
         </View>
 
-        <FlatList
+        <SectionList
           style={styles.scrollContent}
           showsVerticalScrollIndicator={false}
-          data={filteredChats}
-          keyExtractor={(item) => `${item.isPinned ? 'pinned' : 'recent'}-${item.id}`}
+          sections={sections}
+          keyExtractor={(item, index) => `${item.isPinned ? 'pinned' : 'chat'}-${item.id}-${index}`}
           removeClippedSubviews={true}
           maxToRenderPerBatch={10}
           windowSize={10}
+          stickySectionHeadersEnabled={false}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#FFFFFF" />
           }
@@ -975,8 +1001,27 @@ export default function ChatsScreen() {
               </View>
             )
           }
-          renderItem={({ item }) => (
-            <ChatItemComponent chat={item} onLongPress={handleLongPress} />
+          renderSectionHeader={({ section }) =>
+            section.title === 'Messages' ? null : (
+              <View style={[
+                styles.sectionHeader,
+                section.isFading ? styles.sectionHeaderFading : null,
+              ]}>
+                <Text style={[
+                  styles.sectionHeaderText,
+                  section.isFading ? styles.sectionHeaderTextFading : null,
+                ]}>
+                  {section.title}
+                </Text>
+              </View>
+            )
+          }
+          renderItem={({ item, section }) => (
+            <ChatItemComponent
+              chat={item}
+              onLongPress={handleLongPress}
+              isFading={(section as ChatSection).isFading ?? false}
+            />
           )}
           ListFooterComponent={<View style={{ height: 100 }} />}
         />
@@ -1243,5 +1288,31 @@ const styles = StyleSheet.create({
   },
   deleteText: {
     color: '#FF453A',
+  },
+  sectionHeader: {
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 8,
+  },
+  sectionHeaderFading: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(251, 191, 36, 0.2)',
+    marginTop: 4,
+  },
+  sectionHeaderText: {
+    color: 'rgba(255, 255, 255, 0.5)',
+    fontSize: 13,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  sectionHeaderTextFading: {
+    color: '#FBBF24',
+  },
+  fadingNudge: {
+    color: '#FBBF24',
+    fontSize: 12,
+    marginTop: 3,
+    opacity: 0.9,
   },
 });

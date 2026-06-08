@@ -25,6 +25,7 @@ import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   AppState,
   Image,
   KeyboardAvoidingView,
@@ -34,9 +35,11 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View
+  View,
+  Keyboard
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 
 type Message = {
   id: string;
@@ -72,7 +75,7 @@ export default function ChatDetailScreen() {
   const messageListRef = useRef<MessageListRef>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
   // Track whether the user is scrolled near the bottom of the message list
-  const isAtBottomRef = useRef(true);
+  const [isAtBottom, setIsAtBottom] = useState(true);
 
   // ── useChatSession owns: user, isMatched, channelId, icebreaker, loading ──
   const {
@@ -98,21 +101,13 @@ export default function ChatDetailScreen() {
     isMountedRef,
   });
 
-  // Scroll to newest message immediately when messages change
-  useEffect(() => {
-    if (messages.length > 0) {
-      // Scroll immediately without delay to show latest message
-      messageListRef.current?.scrollToStart(false);
-    }
-  }, [messages.length]);
-
   // Auto-scroll to newest message when user sends a message
   useEffect(() => {
     if (messages.length === 0) return;
     const lastMessage = messages[messages.length - 1];
     const userSentLast = lastMessage?.senderId === currentUserId;
     // Only auto-scroll if we're already at bottom or user just sent a message
-    if (isAtBottomRef.current || userSentLast) {
+    if (isAtBottom || userSentLast) {
       messageListRef.current?.scrollToStart(true);
     }
   }, [messages.length, currentUserId]);
@@ -133,6 +128,10 @@ export default function ChatDetailScreen() {
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [recordingUri, setRecordingUri] = useState<string | null>(null);
   const [recordingDuration, setRecordingDuration] = useState(0);
+  // Instagram-style recording bar animation
+  const recordingBarAnim = useRef(new Animated.Value(0)).current; // 0=hidden, 1=shown
+  const micScaleAnim = useRef(new Animated.Value(1)).current;
+  const [recordingCancelled, setRecordingCancelled] = useState(false);
 
   // Report flow states
   const [showReportModal, setShowReportModal] = useState(false);
@@ -157,6 +156,32 @@ export default function ChatDetailScreen() {
     return () => {
       isMountedRef.current = false;
       // typingTimeoutRef cleanup is owned by useTypingStatus hook
+    };
+  }, []);
+
+  // Android: track keyboard height and lift the chat container by exactly that
+  // amount (see the `marginBottom` on the KeyboardAvoidingView below). With
+  // edge-to-edge (Expo SDK 54) the window does NOT resize for the keyboard, so
+  // we move the whole messages+input column up as a unit — this keeps the input
+  // bar flush against the top of the keyboard with no gap. iOS uses the native
+  // KeyboardAvoidingView `padding` behavior instead.
+  const [androidKeyboardHeight, setAndroidKeyboardHeight] = useState(0);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const showSub = Keyboard.addListener('keyboardDidShow', (e) => {
+      const h = e.endCoordinates?.height ?? 0;
+      // Ignore spurious small inset events (e.g. the gesture nav bar) that
+      // aren't a real keyboard — otherwise a leftover lift keeps the input bar
+      // floating above the bottom after the keyboard closes.
+      setAndroidKeyboardHeight(h > 120 ? h : 0);
+    });
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => {
+      setAndroidKeyboardHeight(0);
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
     };
   }, []);
 
@@ -394,17 +419,18 @@ export default function ChatDetailScreen() {
         uri.split('/').pop() ||
         `${type}_${Date.now()}.${ext}`;
 
-      // Read file as base64 to avoid fetch(content://...) failures on Android
+      // Decode base64 to Uint8Array — avoids fetch(data:) failures on Android
       const base64Data = await FileSystem.readAsStringAsync(uri, {
         encoding: 'base64',
       });
-      const dataUrl = `data:${contentType};base64,${base64Data}`;
-      const uploadBlob = await (await fetch(dataUrl)).blob();
+      const binaryStr = atob(base64Data);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) { bytes[i] = binaryStr.charCodeAt(i); }
 
       const filePath = `${type}/${user.id}/${Date.now()}_${fileName}`;
       const { error: uploadError } = await supabase.storage
         .from('messages')
-        .upload(filePath, uploadBlob, { contentType });
+        .upload(filePath, bytes, { contentType });
 
       if (uploadError) {
         throw uploadError;
@@ -527,8 +553,36 @@ export default function ChatDetailScreen() {
         playsInSilentModeIOS: true,
       });
 
+      // Custom preset: audio/mp4 container (AAC codec) — Supabase storage accepts
+      // audio/mp4 but rejects audio/m4a which HIGH_QUALITY produces on Android.
+      const RECORDING_OPTIONS = {
+        android: {
+          extension: '.mp4',
+          outputFormat: Audio.AndroidOutputFormat.MPEG_4,
+          audioEncoder: Audio.AndroidAudioEncoder.AAC,
+          sampleRate: 44100,
+          numberOfChannels: 2,
+          bitRate: 128000,
+        },
+        ios: {
+          extension: '.mp4',
+          outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
+          audioQuality: Audio.IOSAudioQuality.HIGH,
+          sampleRate: 44100,
+          numberOfChannels: 2,
+          bitRate: 128000,
+          linearPCMBitDepth: 16,
+          linearPCMIsBigEndian: false,
+          linearPCMIsFloat: false,
+        },
+        web: {
+          mimeType: 'audio/webm',
+          bitsPerSecond: 128000,
+        },
+      };
+
       const { recording: newRecording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
+        RECORDING_OPTIONS
       );
 
       // Update duration from recording status (more accurate than manual timer)
@@ -611,19 +665,16 @@ export default function ChatDetailScreen() {
 
     try {
       // Upload audio to Supabase storage
-      const audioFileName = `audio_${Date.now()}.m4a`;
-      const audioFile = {
-        uri: recordingUri,
-        type: 'audio/m4a',
-        name: audioFileName,
-      };
+      // Use audio/mp4 (not audio/m4a) — Supabase storage rejects audio/m4a
+      const audioFileName = `audio_${Date.now()}.mp4`;
 
-      // Read file as base64 to avoid fetch(file://...) failures on Android
+      // Decode base64 to Uint8Array — avoids fetch(data:) failures on Android
       const base64Data = await FileSystem.readAsStringAsync(recordingUri, {
         encoding: 'base64',
       });
-      const dataUrl = `data:audio/m4a;base64,${base64Data}`;
-      const blob = await (await fetch(dataUrl)).blob();
+      const binaryStr = atob(base64Data);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) { bytes[i] = binaryStr.charCodeAt(i); }
 
       // Upload to Supabase storage
       const userResult = await supabase.auth.getUser();
@@ -635,8 +686,8 @@ export default function ChatDetailScreen() {
       const filePath = `audio/${user.id}/${Date.now()}_${audioFileName}`;
       const { data: uploadData, error: uploadError } = await supabase.storage
         .from('messages')
-        .upload(filePath, blob, {
-          contentType: 'audio/m4a',
+        .upload(filePath, bytes, {
+          contentType: 'audio/mp4',
         });
 
       if (uploadError) {
@@ -682,14 +733,47 @@ export default function ChatDetailScreen() {
     }
   }, [recordingUri, currentUserId, chatId, channelId, sending, isMatched, addConfirmedMessage, markMessageFailed, removeMessage, showAlert]);
 
-  // Handle audio picker - now opens recording interface
+  // Handle audio picker from attachment modal (legacy modal path)
   const handlePickAudio = useCallback(async () => {
     setShowAttachmentModal(false);
-    // Show recording interface
     setRecordingUri(null);
     setRecordingDuration(0);
     setShowRecordingModal(true);
   }, []);
+
+  // Instagram-style: tap mic to start, tap stop to finish
+  const handleMicPress = useCallback(async () => {
+    if (isRecording) {
+      // Stop and show send bar
+      await stopRecording();
+      Animated.spring(micScaleAnim, { toValue: 1, useNativeDriver: true }).start();
+    } else {
+      // Start recording — slide bar up
+      setRecordingCancelled(false);
+      setRecordingUri(null);
+      setRecordingDuration(0);
+      const hasPermission = await requestAudioPermissions();
+      if (!hasPermission) return;
+      await startRecording();
+      Animated.parallel([
+        Animated.spring(recordingBarAnim, { toValue: 1, friction: 7, tension: 50, useNativeDriver: true }),
+        Animated.spring(micScaleAnim, { toValue: 1.2, useNativeDriver: true }),
+      ]).start();
+    }
+  }, [isRecording, startRecording, stopRecording, requestAudioPermissions, recordingBarAnim, micScaleAnim]);
+
+  const handleCancelRecording = useCallback(async () => {
+    setRecordingCancelled(true);
+    await cancelRecording();
+    Animated.spring(recordingBarAnim, { toValue: 0, friction: 7, useNativeDriver: true }).start();
+    Animated.spring(micScaleAnim, { toValue: 1, useNativeDriver: true }).start();
+  }, [cancelRecording, recordingBarAnim, micScaleAnim]);
+
+  const handleSendRecording = useCallback(async () => {
+    Animated.spring(recordingBarAnim, { toValue: 0, friction: 7, useNativeDriver: true }).start();
+    Animated.spring(micScaleAnim, { toValue: 1, useNativeDriver: true }).start();
+    await sendRecordedAudio();
+  }, [sendRecordedAudio, recordingBarAnim, micScaleAnim]);
 
   // Handle taking a new photo with camera
   const handleTakePhoto = useCallback(async () => {
@@ -758,6 +842,15 @@ export default function ChatDetailScreen() {
   }, [channelId, currentUserId, router]);
 
 
+
+  // Retry a failed message — removes the failed bubble and resends
+  const handleRetryMessage = useCallback(async (failedMessage: any) => {
+    if (!failedMessage?.text || failedMessage.text === failedMessage.id) return;
+    // Remove the failed placeholder
+    removeMessage(failedMessage.id);
+    // Resend
+    await sendText(failedMessage.text);
+  }, [removeMessage, sendText]);
 
   const handleSendMessage = useCallback(async () => {
     if (!messageText.trim() || !currentUserId || !chatId || sending || isMatched !== true) return;
@@ -873,51 +966,184 @@ export default function ChatDetailScreen() {
         <KeyboardAvoidingView
           style={styles.keyboardView}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          keyboardVerticalOffset={0}>
+          keyboardVerticalOffset={Platform.OS === 'ios' ? insets.bottom : 20}>
+          {/* Android: lift messages + input above the keyboard as one unit.
+              The lift lives on this plain inner View (like chatbot's
+              innerContainer) — NOT on the KeyboardAvoidingView — so it doesn't
+              fight the KAV's own layout and clip the input bar. */}
+          <View style={[
+            styles.keyboardView,
+            Platform.OS === 'android' && { marginBottom: androidKeyboardHeight },
+          ]}>
           <MessageList
             ref={messageListRef}
             messages={messages}
             currentUserId={currentUserId}
             avatar={user?.avatar}
+            onRetry={handleRetryMessage}
             icebreaker={icebreaker}
             icebreakerDismissed={icebreakerDismissed}
             onUseIcebreaker={handleUseIcebreaker}
             onDismissIcebreaker={handleDismissIcebreaker}
             contentContainerStyle={messagesContentStyle}
-            onAtBottomChange={(isAtBottom) => { isAtBottomRef.current = isAtBottom; }}
+            onAtBottomChange={setIsAtBottom}
           />
 
-          {/* Input Area */}
-          <View style={[styles.inputSafeArea, { paddingBottom: insets.bottom }]}>
-            <View style={styles.inputContainer}>
-              <TextInput
-                style={styles.textInput}
-                placeholder="Type a message..."
-                placeholderTextColor="rgba(255, 255, 255, 0.5)"
-                value={messageText}
-                onChangeText={handleMessageTextChange}
-                multiline
-                maxLength={500}
-              />
+          {/* Scroll-to-bottom FAB */}
+          {!isAtBottom && (
+            <TouchableOpacity
+              style={styles.scrollFab}
+              onPress={() => messageListRef.current?.scrollToStart(true)}
+              activeOpacity={0.85}
+            >
+              <MaterialIcons name="keyboard-arrow-down" size={22} color="#fff" />
+            </TouchableOpacity>
+          )}
+
+          {/* Icebreaker suggestion chip */}
+          {icebreaker && !icebreakerDismissed && messages.length <= 5 && (
+            <View style={styles.icebreakerChipRow}>
               <TouchableOpacity
-                style={[
-                  styles.sendButton,
-                  isSendDisabled && styles.sendButtonDisabled,
-                ]}
-                onPress={handleSendMessage}
-                disabled={isSendDisabled}
-                activeOpacity={0.7}>
-                {sending ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <MaterialIcons
-                    name="send"
-                    size={24}
-                    color={sendIconColor}
-                  />
-                )}
+                style={styles.icebreakerChip}
+                activeOpacity={0.75}
+                onPress={handleUseIcebreaker}>
+                <Text style={styles.icebreakerChipEmoji}>✨</Text>
+                <Text style={styles.icebreakerChipText} numberOfLines={1}>{icebreaker}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.icebreakerDismissButton}
+                activeOpacity={0.7}
+                onPress={handleDismissIcebreaker}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <MaterialIcons name="close" size={16} color="rgba(255,255,255,0.5)" />
               </TouchableOpacity>
             </View>
+          )}
+
+          {/* Instagram-style recording bar — slides up over the input when recording */}
+          {(isRecording || (recordingUri && !recordingCancelled)) && (
+            <Animated.View
+              style={[
+                styles.igRecordingBar,
+                {
+                  transform: [{
+                    translateY: recordingBarAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [80, 0],
+                    }),
+                  }],
+                  opacity: recordingBarAnim,
+                },
+              ]}
+            >
+              {isRecording ? (
+                <>
+                  {/* Live recording state */}
+                  <TouchableOpacity onPress={handleCancelRecording} style={styles.igCancelBtn} activeOpacity={0.7}>
+                    <MaterialIcons name="delete-outline" size={22} color="rgba(255,255,255,0.5)" />
+                  </TouchableOpacity>
+                  <View style={styles.igWaveformRow}>
+                    <View style={styles.igRecDot} />
+                    <Text style={styles.igRecDuration}>{formatRecordingDuration(recordingDuration)}</Text>
+                    {/* Animated waveform bars */}
+                    {[1, 0.5, 0.9, 0.3, 0.7, 0.4, 0.8, 0.2, 0.6, 0.5, 0.9, 0.4].map((h, i) => (
+                      <View key={i} style={[styles.igWaveBar, { height: 8 + h * 16, opacity: 0.4 + h * 0.5 }]} />
+                    ))}
+                  </View>
+                  <TouchableOpacity onPress={handleMicPress} style={styles.igStopBtn} activeOpacity={0.8}>
+                    <MaterialIcons name="stop" size={20} color="#fff" />
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <>
+                  {/* Preview / send state */}
+                  <TouchableOpacity onPress={handleCancelRecording} style={styles.igCancelBtn} activeOpacity={0.7}>
+                    <MaterialIcons name="delete-outline" size={22} color="rgba(255,255,255,0.5)" />
+                  </TouchableOpacity>
+                  <View style={styles.igWaveformRow}>
+                    <MaterialIcons name="audiotrack" size={16} color="rgba(168,85,247,0.8)" />
+                    <Text style={styles.igRecDuration}>{formatRecordingDuration(recordingDuration)}</Text>
+                    <Text style={styles.igReadyText}>Ready to send</Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={handleSendRecording}
+                    style={styles.igSendAudioBtn}
+                    disabled={sending}
+                    activeOpacity={0.8}>
+                    {sending
+                      ? <ActivityIndicator size="small" color="#fff" />
+                      : <MaterialIcons name="send" size={18} color="#fff" />}
+                  </TouchableOpacity>
+                </>
+              )}
+            </Animated.View>
+          )}
+
+          {/* Input Area */}
+          <View style={[styles.inputSafeArea, {
+            // Keyboard CLOSED: pad by the bottom safe-area inset so the dark
+            // input bar fills the gesture-nav area and the controls clear it.
+            // Keyboard OPEN (Android): no inset — the column is already lifted
+            // by the KeyboardAvoidingView marginBottom, and the keyboard covers
+            // the nav area, so any inset here would re-introduce a gap.
+            // (androidKeyboardHeight is always 0 on iOS, where the native
+            // KeyboardAvoidingView padding handles the lift.)
+            paddingBottom: androidKeyboardHeight > 0 ? 0 : insets.bottom
+          }]}>
+            <View style={styles.inputContainer}>
+              {/* Left: attachment */}
+              <TouchableOpacity
+                style={styles.inputIconBtn}
+                onPress={() => setShowAttachmentModal(true)}
+                activeOpacity={0.7}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <MaterialIcons name="add-circle-outline" size={26} color="rgba(168,85,247,0.8)" />
+              </TouchableOpacity>
+
+              {/* Text input — mic sits inside at the right */}
+              <View style={styles.textInputWrapper}>
+                <TextInput
+                  style={styles.textInput}
+                  placeholder="Type a message..."
+                  placeholderTextColor="rgba(255, 255, 255, 0.35)"
+                  value={messageText}
+                  onChangeText={handleMessageTextChange}
+                  multiline
+                  maxLength={500}
+                />
+                {messageText.trim().length === 0 && (
+                  <Animated.View style={[styles.inlineMicBtn, { transform: [{ scale: micScaleAnim }] }]}>
+                    <TouchableOpacity onPress={handleMicPress} activeOpacity={0.7} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                      <MaterialIcons name="mic" size={20} color={isRecording ? '#EF4444' : 'rgba(168,85,247,0.85)'} />
+                    </TouchableOpacity>
+                  </Animated.View>
+                )}
+              </View>
+
+              {/* Right: camera OR send */}
+              {messageText.trim().length === 0 ? (
+                <TouchableOpacity
+                  style={styles.inputIconBtn}
+                  onPress={handleTakePhoto}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <MaterialIcons name="photo-camera" size={24} color="rgba(255,255,255,0.5)" />
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.sendButton, isSendDisabled && styles.sendButtonDisabled]}
+                  onPress={handleSendMessage}
+                  disabled={isSendDisabled}
+                  activeOpacity={0.7}>
+                  {sending ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <MaterialIcons name="send" size={20} color="#FFFFFF" />
+                  )}
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
           </View>
         </KeyboardAvoidingView>
       </SafeAreaView>
@@ -1019,7 +1245,7 @@ export default function ChatDetailScreen() {
                 }}
                 style={styles.recordingCloseButton}
                 disabled={isRecording}>
-                <MaterialIcons name="close" size={24} color="#1B1528" />
+                <MaterialIcons name="close" size={24} color="rgba(255,255,255,0.6)" />
               </TouchableOpacity>
             </View>
 
@@ -1173,7 +1399,7 @@ export default function ChatDetailScreen() {
               style={styles.modalCloseButton}
               onPress={() => setShowDidYouMeetModal(false)}
               activeOpacity={0.7}>
-              <MaterialIcons name="close" size={24} color="#1B1528" />
+              <MaterialIcons name="close" size={24} color="rgba(255,255,255,0.6)" />
             </TouchableOpacity>
             <Text style={styles.didYouMeetTitle}>
               Did you and {user?.name} meet?
@@ -1217,7 +1443,7 @@ export default function ChatDetailScreen() {
               style={styles.modalCloseButton}
               onPress={() => setShowSeeAgainModal(false)}
               activeOpacity={0.7}>
-              <MaterialIcons name="close" size={24} color="#1B1528" />
+              <MaterialIcons name="close" size={24} color="rgba(255,255,255,0.6)" />
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.modalBackButton}
@@ -1271,7 +1497,7 @@ export default function ChatDetailScreen() {
               style={styles.modalCloseButton}
               onPress={() => setShowThanksModal(false)}
               activeOpacity={0.7}>
-              <MaterialIcons name="close" size={24} color="#1B1528" />
+              <MaterialIcons name="close" size={24} color="rgba(255,255,255,0.6)" />
             </TouchableOpacity>
             <View style={styles.thanksIllustration}>
               <Text style={styles.thanksHeart}>🤝</Text>
@@ -1305,7 +1531,7 @@ export default function ChatDetailScreen() {
               style={styles.modalCloseButton}
               onPress={() => setShowUnmatchModal(false)}
               activeOpacity={0.7}>
-              <MaterialIcons name="close" size={24} color="#1B1528" />
+              <MaterialIcons name="close" size={24} color="rgba(255,255,255,0.6)" />
             </TouchableOpacity>
             <View style={styles.unmatchCheckmark}>
               <MaterialIcons name="check-circle" size={48} color="#10B981" />
@@ -1354,7 +1580,7 @@ export default function ChatDetailScreen() {
               style={styles.modalCloseButton}
               onPress={() => setShowUnmatchReasonModal(false)}
               activeOpacity={0.7}>
-              <MaterialIcons name="close" size={24} color="#1B1528" />
+              <MaterialIcons name="close" size={24} color="rgba(255,255,255,0.6)" />
             </TouchableOpacity>
             <View style={styles.thanksIllustration}>
               <Text style={styles.thanksHeart}>🤝</Text>
@@ -1392,7 +1618,7 @@ export default function ChatDetailScreen() {
               style={styles.modalCloseButton}
               onPress={() => setShowReportModal(false)}
               activeOpacity={0.7}>
-              <MaterialIcons name="close" size={24} color="#1B1528" />
+              <MaterialIcons name="close" size={24} color="rgba(255,255,255,0.6)" />
             </TouchableOpacity>
             <Text style={styles.reportTitle}>Report {user?.name}</Text>
             <Text style={styles.reportDescription}>
@@ -1473,7 +1699,7 @@ export default function ChatDetailScreen() {
               style={styles.modalCloseButton}
               onPress={() => setShowReportCategoryModal(false)}
               activeOpacity={0.7}>
-              <MaterialIcons name="close" size={24} color="#1B1528" />
+              <MaterialIcons name="close" size={24} color="rgba(255,255,255,0.6)" />
             </TouchableOpacity>
             <Text style={styles.reportCategoryTitle}>What do you want to report?</Text>
             <Text style={styles.reportCategorySubtitle}>
@@ -1528,7 +1754,7 @@ export default function ChatDetailScreen() {
               style={styles.modalCloseButton}
               onPress={() => setShowReportSubcategoryModal(false)}
               activeOpacity={0.7}>
-              <MaterialIcons name="close" size={24} color="#1B1528" />
+              <MaterialIcons name="close" size={24} color="rgba(255,255,255,0.6)" />
             </TouchableOpacity>
             <Text style={styles.reportSubcategoryTitle}>{selectedReportCategory}</Text>
 
@@ -1623,7 +1849,7 @@ export default function ChatDetailScreen() {
               style={styles.modalCloseButton}
               onPress={() => setShowReportDetailsModal(false)}
               activeOpacity={0.7}>
-              <MaterialIcons name="close" size={24} color="#1B1528" />
+              <MaterialIcons name="close" size={24} color="rgba(255,255,255,0.6)" />
             </TouchableOpacity>
             <Text style={styles.reportDetailsTitle}>
               Tell us more about {selectedReportSubcategory}
@@ -1688,7 +1914,7 @@ export default function ChatDetailScreen() {
               style={styles.modalCloseButton}
               onPress={() => setShowReportConfirmationModal(false)}
               activeOpacity={0.7}>
-              <MaterialIcons name="close" size={24} color="#1B1528" />
+              <MaterialIcons name="close" size={24} color="rgba(255,255,255,0.6)" />
             </TouchableOpacity>
             <View style={styles.reportCheckmark}>
               <MaterialIcons name="check-circle" size={64} color="#10B981" />
@@ -1923,47 +2149,92 @@ const styles = StyleSheet.create({
   readIndicator: {
     marginLeft: 2,
   },
+  scrollFab: {
+    position: 'absolute',
+    bottom: 80,
+    right: 14,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(124,58,237,0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+    shadowColor: '#7C3AED',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.45,
+    shadowRadius: 6,
+    elevation: 8,
+  },
   inputSafeArea: {
-    backgroundColor: '#1A0B2E',
+    backgroundColor: '#0F0618',
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#3A2A56',
-    backgroundColor: '#1A0B2E',
-    gap: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 9,
+    paddingTop: 9,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(139,92,246,0.2)',
+    backgroundColor: '#0F0618',
+    gap: 6,
   },
-  attachButton: {
-    width: 40,
-    height: 40,
+  inputIconBtn: {
+    width: 38,
+    height: 38,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 8,
+    borderRadius: 19,
+    marginBottom: 1,
+  },
+  textInputWrapper: {
+    flex: 1,
+    position: 'relative',
+    justifyContent: 'center',
   },
   textInput: {
     flex: 1,
-    backgroundColor: '#3A2A56',
-    borderRadius: 20,
+    backgroundColor: 'rgba(45,27,78,0.8)',
+    borderRadius: 24,
     paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingRight: 40,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 9,
     color: '#FFFFFF',
     fontSize: 15,
-    maxHeight: 100,
-    marginRight: 8,
+    maxHeight: 120,
+    minHeight: 42,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(168,85,247,0.25)',
+    lineHeight: 20,
   },
-  sendButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#A855F7',
+  inlineMicBtn: {
+    position: 'absolute',
+    right: 11,
+    bottom: 10,
+    width: 22,
+    height: 22,
     justifyContent: 'center',
     alignItems: 'center',
   },
+  sendButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#9333EA',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 0,
+    shadowColor: '#9333EA',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 6,
+    elevation: 4,
+  },
   sendButtonDisabled: {
-    backgroundColor: '#3A2A56',
+    backgroundColor: 'rgba(50,30,80,0.7)',
+    shadowOpacity: 0,
+    elevation: 0,
   },
   loadingContainer: {
     flex: 1,
@@ -2541,18 +2812,88 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   // Audio Recording Modal Styles
+  // Instagram-style recording bar (inline, above input)
+  igRecordingBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1E0F35',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(124,58,237,0.25)',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  igCancelBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  igWaveformRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    overflow: 'hidden',
+  },
+  igRecDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#EF4444',
+    marginRight: 4,
+  },
+  igRecDuration: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#EDE8FF',
+    marginRight: 6,
+    minWidth: 36,
+  },
+  igWaveBar: {
+    width: 3,
+    borderRadius: 2,
+    backgroundColor: '#A855F7',
+  },
+  igReadyText: {
+    fontSize: 13,
+    color: 'rgba(168,85,247,0.8)',
+    fontWeight: '500',
+    marginLeft: 4,
+  },
+  igStopBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#EF4444',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  igSendAudioBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#7C3AED',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  // Legacy modal (kept for attachment modal audio path)
   recordingModalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
     justifyContent: 'flex-end',
   },
   recordingModal: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#1E0F35',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     padding: 24,
     paddingBottom: Platform.OS === 'ios' ? 34 : 24,
     maxHeight: '70%',
+    borderTopWidth: 1,
+    borderColor: 'rgba(124,58,237,0.3)',
   },
   recordingHeader: {
     flexDirection: 'row',
@@ -2561,9 +2902,9 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   recordingTitle: {
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: '700',
-    color: '#1B1528',
+    color: '#EDE8FF',
   },
   recordingCloseButton: {
     width: 32,
@@ -2578,7 +2919,7 @@ const styles = StyleSheet.create({
   recordingVisualizer: {
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 200,
+    minHeight: 160,
     width: '100%',
   },
   recordingIndicator: {
@@ -2587,45 +2928,47 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   recordingDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
     backgroundColor: '#EF4444',
     marginRight: 8,
   },
   recordingStatusText: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
     color: '#EF4444',
   },
   recordingDurationText: {
-    fontSize: 48,
+    fontSize: 44,
     fontWeight: '700',
-    color: '#1B1528',
+    color: '#EDE8FF',
     marginTop: 8,
   },
   recordingPromptText: {
-    fontSize: 16,
-    color: '#6B7280',
-    marginTop: 16,
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.4)',
+    marginTop: 12,
     textAlign: 'center',
   },
   recordingControls: {
-    marginTop: 32,
+    marginTop: 28,
     alignItems: 'center',
   },
   recordButton: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#FEE2E2',
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: 'rgba(239,68,68,0.15)',
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 2,
+    borderColor: 'rgba(239,68,68,0.4)',
   },
   stopButton: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
     backgroundColor: '#EF4444',
     justifyContent: 'center',
     alignItems: 'center',
@@ -2639,7 +2982,7 @@ const styles = StyleSheet.create({
   playbackText: {
     fontSize: 20,
     fontWeight: '600',
-    color: '#1B1528',
+    color: '#EDE8FF',
     marginTop: 16,
   },
   playbackDuration: {
@@ -2680,5 +3023,40 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
+  },
+  icebreakerChipRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    gap: 8,
+  },
+  icebreakerChip: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(168, 85, 247, 0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(168, 85, 247, 0.45)',
+    borderRadius: 20,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    gap: 6,
+  },
+  icebreakerChipEmoji: {
+    fontSize: 14,
+  },
+  icebreakerChipText: {
+    flex: 1,
+    color: 'rgba(255, 255, 255, 0.9)',
+    fontSize: 14,
+  },
+  icebreakerDismissButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

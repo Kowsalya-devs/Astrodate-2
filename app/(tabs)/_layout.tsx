@@ -43,12 +43,12 @@ export default function TabLayout() {
           }}
         />
 
-        {/* 2 — Standouts (replaces old Likes tab) */}
+        {/* 2 — Likes (renamed from Standouts — honest label) */}
         <Tabs.Screen
           name="likes"
           options={{
-            title: 'Standouts',
-            tabBarIcon: ({ color }) => <MaterialIcons name="stars" size={28} color={color} />,
+            title: 'Likes',
+            tabBarIcon: ({ color }) => <MaterialIcons name="favorite" size={28} color={color} />,
           }}
         />
 
@@ -61,12 +61,12 @@ export default function TabLayout() {
           }}
         />
 
-        {/* 4 — Notifications (replaces Insights in tab bar) */}
+        {/* 4 — Cosmic (dedicated Standouts tab — replaces Alerts) */}
         <Tabs.Screen
-          name="notifications"
+          name="cosmic"
           options={{
-            title: 'Alerts',
-            tabBarIcon: ({ color }) => <MaterialIcons name="notifications" size={28} color={color} />,
+            title: 'Cosmic',
+            tabBarIcon: ({ color }) => <MaterialIcons name="nights-stay" size={28} color={color} />,
           }}
         />
 
@@ -79,13 +79,9 @@ export default function TabLayout() {
           }}
         />
 
-        {/* Hidden screens — accessible via router.push, not shown in tab bar */}
-        <Tabs.Screen
-          name="insights"
-          options={{
-            href: null, // hidden from tab bar, still navigable
-          }}
-        />
+        {/* Hidden — accessible via router.push, not shown in tab bar */}
+        <Tabs.Screen name="insights" options={{ href: null }} />
+        <Tabs.Screen name="notifications" options={{ href: null }} />
       </Tabs>
     </TabBarVisibilityContext.Provider>
   );

@@ -1,6 +1,11 @@
 import { getMatch } from './matches';
 import { drainPendingPushNotifications } from './notifications';
 import { supabase } from './supabase';
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export type ModerationStatus = 'SAFE' | 'SPAM' | 'HARASSMENT' | 'ILLEGAL';
+
 export interface Message {
   id: string;
   sender_id: string;
@@ -9,54 +14,102 @@ export interface Message {
   is_read: boolean;
   channel_id: string;
   created_at: string;
+  moderation_status?: ModerationStatus;
 }
 
+// ── Moderation helper ─────────────────────────────────────────────────────────
+
 /**
- * Sends a message to another user (optimized - accepts channel_id to avoid extra query)
- * @param receiverId - User ID of the message recipient
+ * Calls the moderate-message edge function to classify a message.
+ * Fails open (returns 'SAFE') on network/service errors so a backend
+ * misconfiguration never silently blocks legitimate users.
+ */
+const moderateMessage = async (messageText: string): Promise<ModerationStatus> => {
+  try {
+    const { data, error } = await supabase.functions.invoke<{ status: ModerationStatus }>(
+      'moderate-message',
+      { body: { messageText } }
+    );
+
+    if (error) {
+      console.warn('⚠️ Moderation service error (failing open):', error.message);
+      return 'SAFE';
+    }
+
+    const status = data?.status;
+    if (status === 'SAFE' || status === 'SPAM' || status === 'HARASSMENT' || status === 'ILLEGAL') {
+      return status;
+    }
+
+    console.warn('⚠️ Unexpected moderation status, defaulting to SAFE:', status);
+    return 'SAFE';
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn('⚠️ moderateMessage exception (failing open):', msg);
+    return 'SAFE';
+  }
+};
+
+// ── sendMessage ───────────────────────────────────────────────────────────────
+
+/**
+ * Moderates then sends a message to another user.
+ * ILLEGAL messages are blocked before insert.
+ * SPAM / HARASSMENT messages are stored with their classification for review.
+ *
+ * @param receiverId  - User ID of the message recipient
  * @param messageText - Text content of the message
- * @param channelId - Optional channel_id (if provided, skips getMatch call for better performance)
- * @returns Success status and message data
+ * @param channelId   - Optional channel_id (skips getMatch call if provided)
  */
 export const sendMessage = async (
   receiverId: string,
   messageText: string,
   channelId?: string
-): Promise<{ success: boolean; data?: Message; error?: string }> => {
+): Promise<{ success: boolean; data?: Message; error?: string; blocked?: boolean }> => {
   try {
-    // Get current user ID
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    // ── 1. Auth ────────────────────────────────────────────────────────────
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
 
     if (userError || !user) {
       console.error('❌ Could not get current user:', userError);
-      return {
-        success: false,
-        error: 'User not authenticated',
-      };
+      return { success: false, error: 'User not authenticated' };
     }
 
     const senderId = user.id;
 
-    // Use provided channel_id or fetch it (cached channel_id is faster)
+    // ── 2. Resolve channel ─────────────────────────────────────────────────
     let finalChannelId = channelId;
     if (!finalChannelId) {
       const matchResult = await getMatch(receiverId);
       if (!matchResult.success || !matchResult.data) {
         console.error('❌ Users are not matched');
-        return {
-          success: false,
-          error: 'You can only message users you have matched with',
-        };
+        return { success: false, error: 'You can only message users you have matched with' };
       }
       finalChannelId = matchResult.data.channel_id;
     }
 
-    // Insert message into database with channel_id (optimized - no extra queries)
+    // ── 3. Moderate ────────────────────────────────────────────────────────
+    const moderationStatus = await moderateMessage(messageText);
+
+    if (moderationStatus === 'ILLEGAL') {
+      console.warn('🚫 Message blocked — classified as ILLEGAL');
+      return {
+        success: false,
+        blocked: true,
+        error: 'Message violates community guidelines and cannot be sent.',
+      };
+    }
+
+    // ── 4. Insert ──────────────────────────────────────────────────────────
     console.log('📨 Inserting message:', {
       sender_id: senderId,
       receiver_id: receiverId,
       message_text: messageText,
       channel_id: finalChannelId,
+      moderation_status: moderationStatus,
     });
 
     const { data, error } = await supabase
@@ -67,100 +120,85 @@ export const sendMessage = async (
         message_text: messageText,
         is_read: false,
         channel_id: finalChannelId,
+        moderation_status: moderationStatus,
       })
       .select()
       .single();
 
     if (error) {
       console.error('❌ Error sending message:', error);
-      return {
-        success: false,
-        error: error.message,
-      };
+      return { success: false, error: error.message };
     }
-    drainPendingPushNotifications().catch(() => { });
 
-    return {
-      success: true,
-      data: data as Message,
-    };
+    drainPendingPushNotifications().catch(() => {});
+
+    return { success: true, data: data as Message };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('❌ Exception sending message:', errorMessage);
-    return {
-      success: false,
-      error: errorMessage,
-    };
+    return { success: false, error: errorMessage };
   }
 };
 
+// ── getMessages ───────────────────────────────────────────────────────────────
+
 /**
- * Fetches messages between current user and another user (optimized - uses channel_id)
+ * Fetches messages between current user and another user (optimized — uses channel_id)
  * @param otherUserId - User ID of the other participant
- * @param channelId - Optional channel_id (if provided, skips getMatch call for better performance)
- * @returns Array of messages
+ * @param channelId   - Optional channel_id (skips getMatch call if provided)
  */
 export const getMessages = async (
   otherUserId: string,
   channelId?: string
 ): Promise<{ success: boolean; data?: Message[]; error?: string }> => {
   try {
-    // Get current user ID
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
 
     if (userError || !user) {
       console.error('❌ Could not get current user:', userError);
-      return {
-        success: false,
-        error: 'User not authenticated',
-      };
+      return { success: false, error: 'User not authenticated' };
     }
 
-    const currentUserId = user.id;
-
-    // Use provided channel_id or fetch it (cached channel_id is faster)
     let finalChannelId = channelId;
     if (!finalChannelId) {
       const matchResult = await getMatch(otherUserId);
       if (!matchResult.success || !matchResult.data) {
         console.error('❌ Users are not matched');
-        return {
-          success: false,
-          error: 'You can only view messages with users you have matched with',
-        };
+        return { success: false, error: 'You can only view messages with users you have matched with' };
       }
       finalChannelId = matchResult.data.channel_id;
     }
 
-    // Query by channel_id only — avoids leaking messages from old channels
-    // after an unmatch + rematch cycle creates a new channel_id.
+    // Limit to latest 200 messages — prevents full-history fetch from blocking the UI.
+    // Older message pagination can be added later via cursor/offset when needed.
     const { data, error } = await supabase
       .from('messages')
       .select('*')
       .eq('channel_id', finalChannelId)
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: false })
+      .limit(200);
+
+    // Results are newest-first from DB; reverse to get oldest-first for state
+    // (MessageList re-sorts to newest-first for the inverted FlatList)
+    if (data) data.reverse();
 
     if (error) {
       console.error('❌ Error fetching messages:', error);
-      return {
-        success: false,
-        error: error.message,
-      };
+      return { success: false, error: error.message };
     }
 
-    return {
-      success: true,
-      data: (data || []) as Message[],
-    };
+    return { success: true, data: (data || []) as Message[] };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('❌ Exception fetching messages:', errorMessage);
-    return {
-      success: false,
-      error: errorMessage,
-    };
+    return { success: false, error: errorMessage };
   }
 };
+
+// ── getLastMessage (deprecated) ───────────────────────────────────────────────
 
 /**
  * @deprecated
@@ -169,55 +207,47 @@ export const getMessages = async (
  */
 export const getLastMessage = async (
   otherUserId: string
-): Promise<{ success: boolean; data?: { message: string; timestamp: Date; isRead: boolean; isSentByMe: boolean } | null; error?: string }> => {
+): Promise<{
+  success: boolean;
+  data?: { message: string; timestamp: Date; isRead: boolean; isSentByMe: boolean } | null;
+  error?: string;
+}> => {
   try {
-    // Get current user ID
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
 
     if (userError || !user) {
-      return {
-        success: false,
-        error: 'User not authenticated',
-      };
+      return { success: false, error: 'User not authenticated' };
     }
 
     const currentUserId = user.id;
 
-    // Verify that users are matched (only check if we need to fetch messages)
-    // If no match, return null (no last message)
     const matchResult = await getMatch(otherUserId);
     if (!matchResult.success || !matchResult.data) {
-      return {
-        success: true,
-        data: null,
-      };
+      return { success: true, data: null };
     }
 
-    // Fetch messages between current user and other user
     const { data, error } = await supabase
       .from('messages')
       .select('*')
-      .or(`and(sender_id.eq.${currentUserId},receiver_id.eq.${otherUserId}),and(sender_id.eq.${otherUserId},receiver_id.eq.${currentUserId})`)
+      .or(
+        `and(sender_id.eq.${currentUserId},receiver_id.eq.${otherUserId}),and(sender_id.eq.${otherUserId},receiver_id.eq.${currentUserId})`
+      )
       .order('created_at', { ascending: false })
       .limit(1);
 
     if (error) {
       console.error('❌ Error fetching last message:', error);
-      return {
-        success: false,
-        error: error.message,
-      };
+      return { success: false, error: error.message };
     }
 
     if (!data || data.length === 0) {
-      return {
-        success: true,
-        data: null,
-      };
+      return { success: true, data: null };
     }
 
     const conversationMessage = data[0];
-
     return {
       success: true,
       data: {
@@ -230,44 +260,32 @@ export const getLastMessage = async (
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('❌ Exception fetching last message:', errorMessage);
-    return {
-      success: false,
-      error: errorMessage,
-    };
+    return { success: false, error: errorMessage };
   }
 };
 
-/**
- * Gets unread message count for a conversation
- * @param otherUserId - User ID of the other participant
- * @returns Unread message count
- */
+// ── getUnreadCount ────────────────────────────────────────────────────────────
+
 export const getUnreadCount = async (
   otherUserId: string
 ): Promise<{ success: boolean; count?: number; error?: string }> => {
   try {
-    // Get current user ID
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
 
     if (userError || !user) {
-      return {
-        success: false,
-        error: 'User not authenticated',
-      };
+      return { success: false, error: 'User not authenticated' };
     }
 
     const currentUserId = user.id;
 
-    // Verify that users are matched (if no match, return 0 unread)
     const matchResult = await getMatch(otherUserId);
     if (!matchResult.success || !matchResult.data) {
-      return {
-        success: true,
-        count: 0,
-      };
+      return { success: true, count: 0 };
     }
 
-    // Count unread messages from other user to current user
     const { count, error } = await supabase
       .from('messages')
       .select('*', { count: 'exact', head: true })
@@ -277,41 +295,30 @@ export const getUnreadCount = async (
 
     if (error) {
       console.error('❌ Error fetching unread count:', error);
-      return {
-        success: false,
-        error: error.message,
-      };
+      return { success: false, error: error.message };
     }
 
-    return {
-      success: true,
-      count: count || 0,
-    };
+    return { success: true, count: count || 0 };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('❌ Exception fetching unread count:', errorMessage);
-    return {
-      success: false,
-      error: errorMessage,
-    };
+    return { success: false, error: errorMessage };
   }
 };
 
-/**
- * Calls the delete_old_messages function to clean up messages older than 5 minutes
- * This is called periodically from the client to ensure automatic deletion
- * @returns Success status and deletion statistics
- */
-export const cleanupOldMessages = async (): Promise<{ success: boolean; deleted?: { messages: number; conversations: number }; error?: string }> => {
+// ── cleanupOldMessages ────────────────────────────────────────────────────────
+
+export const cleanupOldMessages = async (): Promise<{
+  success: boolean;
+  deleted?: { messages: number; conversations: number };
+  error?: string;
+}> => {
   try {
     const { data, error } = await supabase.rpc('delete_old_messages');
 
     if (error) {
       console.error('❌ Error cleaning up old messages:', error);
-      return {
-        success: false,
-        error: error.message,
-      };
+      return { success: false, error: error.message };
     }
 
     return {
@@ -324,40 +331,30 @@ export const cleanupOldMessages = async (): Promise<{ success: boolean; deleted?
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('❌ Exception cleaning up old messages:', errorMessage);
-    return {
-      success: false,
-      error: errorMessage,
-    };
+    return { success: false, error: errorMessage };
   }
 };
 
-/**
- * Marks messages as read (optimized - uses channel_id for faster query)
- * @param senderId - User ID of the message sender
- * @param channelId - Optional channel_id (if provided, skips getMatch call for better performance)
- * @returns Success status
- */
+// ── markMessagesAsRead ────────────────────────────────────────────────────────
+
 export const markMessagesAsRead = async (
   senderId: string,
   channelId?: string
 ): Promise<{ success: boolean; error?: string }> => {
   try {
-    // Get current user ID
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
 
     if (userError || !user) {
       console.error('❌ Could not get current user:', userError);
-      return {
-        success: false,
-        error: 'User not authenticated',
-      };
+      return { success: false, error: 'User not authenticated' };
     }
 
     const currentUserId = user.id;
 
-    // OPTIMIZED: Use channel_id if provided, otherwise use sender_id/receiver_id
     if (channelId) {
-      // Fast path: use channel_id (uses index)
       const { error } = await supabase
         .from('messages')
         .update({ is_read: true })
@@ -367,13 +364,9 @@ export const markMessagesAsRead = async (
 
       if (error) {
         console.error('❌ Error marking messages as read:', error);
-        return {
-          success: false,
-          error: error.message,
-        };
+        return { success: false, error: error.message };
       }
     } else {
-      // Fallback: use sender_id/receiver_id
       const { error } = await supabase
         .from('messages')
         .update({ is_read: true })
@@ -383,40 +376,23 @@ export const markMessagesAsRead = async (
 
       if (error) {
         console.error('❌ Error marking messages as read:', error);
-        return {
-          success: false,
-          error: error.message,
-        };
+        return { success: false, error: error.message };
       }
     }
 
-    return {
-      success: true,
-    };
+    return { success: true };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('❌ Exception marking messages as read:', errorMessage);
-    return {
-      success: false,
-      error: errorMessage,
-    };
+    return { success: false, error: errorMessage };
   }
 };
 
-// Keyed debounce map — one independent timer per channelId.
-// Avoids module-level globals that break when multiple chat screens are mounted.
+// ── markMessagesAsReadDebounced ───────────────────────────────────────────────
+
 const markReadTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-/**
- * Debounced version of markMessagesAsRead - batches read receipts for better performance.
- * Safe for concurrent use across multiple open chat screens.
- * @param senderId - User ID of the message sender
- * @param channelId - Optional channel_id (used as debounce key)
- */
-export const markMessagesAsReadDebounced = (
-  senderId: string,
-  channelId?: string
-): void => {
+export const markMessagesAsReadDebounced = (senderId: string, channelId?: string): void => {
   const key = channelId || senderId;
 
   const existing = markReadTimers.get(key);
@@ -432,18 +408,17 @@ export const markMessagesAsReadDebounced = (
   markReadTimers.set(key, timer);
 };
 
-/**
- * Deletes all messages between current user and another user
- * @param otherUserId - User ID of the other participant
- * @returns Success status and count of deleted messages
- */
+// ── deleteMessages ────────────────────────────────────────────────────────────
+
 export const deleteMessages = async (
   otherUserId: string,
   channelId?: string
 ): Promise<{ success: boolean; deletedCount?: number; error?: string }> => {
   try {
-    // Get current user ID
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
 
     if (userError || !user) {
       console.error('❌ Could not get current user:', userError);
@@ -453,19 +428,13 @@ export const deleteMessages = async (
     const currentUserId = user.id;
 
     if (channelId) {
-      // Fast path — delete entire conversation by channel_id in one query.
-      // Unambiguous even after unmatch + rematch cycles.
-      const { error } = await supabase
-        .from('messages')
-        .delete()
-        .eq('channel_id', channelId);
+      const { error } = await supabase.from('messages').delete().eq('channel_id', channelId);
 
       if (error) {
         console.error('❌ Error deleting messages by channel_id:', error);
         return { success: false, error: error.message };
       }
     } else {
-      // Fallback — delete by both directions when channel_id is unavailable.
       const { error: error1 } = await supabase
         .from('messages')
         .delete()
@@ -498,46 +467,38 @@ export const deleteMessages = async (
   }
 };
 
-/**
- * Batch fetch last messages for multiple users
- * @param otherUserIds - Array of user IDs
- * @param channelIdMap - Optional map of userId → channelId for channel-scoped queries
- * @returns Map of user_id to last message data
- */
+// ── getLastMessagesBatch ──────────────────────────────────────────────────────
+
 export const getLastMessagesBatch = async (
   otherUserIds: string[],
   channelIdMap?: Map<string, string>
-): Promise<{ success: boolean; data?: Map<string, { message: string; timestamp: Date; isRead: boolean; isSentByMe: boolean }>; error?: string }> => {
+): Promise<{
+  success: boolean;
+  data?: Map<string, { message: string; timestamp: Date; isRead: boolean; isSentByMe: boolean }>;
+  error?: string;
+}> => {
   try {
-    // Get current user ID
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
 
     if (userError || !user) {
-      return {
-        success: false,
-        error: 'User not authenticated',
-      };
+      return { success: false, error: 'User not authenticated' };
     }
 
     const currentUserId = user.id;
 
     if (otherUserIds.length === 0) {
-      return {
-        success: true,
-        data: new Map(),
-      };
+      return { success: true, data: new Map() };
     }
 
-    // Fetch the single latest message per conversation by querying each
-    // conversation partner's channel directly — one targeted query per user
-    // instead of scanning 2000 rows client-side.
     const messageMap = new Map<string, { message: string; timestamp: Date; isRead: boolean; isSentByMe: boolean }>();
 
     const results = await Promise.allSettled(
       otherUserIds.map((otherUserId) => {
         const channelId = channelIdMap?.get(otherUserId);
         if (channelId) {
-          // Channel-scoped: fast and accurate
           return supabase
             .from('messages')
             .select('sender_id, receiver_id, message_text, created_at, is_read')
@@ -545,7 +506,6 @@ export const getLastMessagesBatch = async (
             .order('created_at', { ascending: false })
             .limit(1);
         }
-        // Fallback: direction-based
         return supabase
           .from('messages')
           .select('sender_id, receiver_id, message_text, created_at, is_read')
@@ -559,7 +519,12 @@ export const getLastMessagesBatch = async (
 
     results.forEach((result, index) => {
       const otherUserId = otherUserIds[index];
-      if (result.status === 'fulfilled' && !result.value.error && result.value.data && result.value.data.length > 0) {
+      if (
+        result.status === 'fulfilled' &&
+        !result.value.error &&
+        result.value.data &&
+        result.value.data.length > 0
+      ) {
         const msg = result.value.data[0];
         messageMap.set(otherUserId, {
           message: msg.message_text ?? '',
@@ -570,49 +535,35 @@ export const getLastMessagesBatch = async (
       }
     });
 
-    return {
-      success: true,
-      data: messageMap,
-    };
+    return { success: true, data: messageMap };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('❌ Exception fetching last messages batch:', errorMessage);
-    return {
-      success: false,
-      error: errorMessage,
-    };
+    return { success: false, error: errorMessage };
   }
 };
 
-/**
- * Batch fetch unread counts for multiple users
- * @param otherUserIds - Array of user IDs
- * @returns Map of user_id to unread count
- */
+// ── getUnreadCountsBatch ──────────────────────────────────────────────────────
+
 export const getUnreadCountsBatch = async (
   otherUserIds: string[]
 ): Promise<{ success: boolean; data?: Map<string, number>; error?: string }> => {
   try {
-    // Get current user ID
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
 
     if (userError || !user) {
-      return {
-        success: false,
-        error: 'User not authenticated',
-      };
+      return { success: false, error: 'User not authenticated' };
     }
 
     const currentUserId = user.id;
 
     if (otherUserIds.length === 0) {
-      return {
-        success: true,
-        data: new Map(),
-      };
+      return { success: true, data: new Map() };
     }
 
-    // Fetch all unread messages in one query
     const { data, error } = await supabase
       .from('messages')
       .select('sender_id')
@@ -622,13 +573,9 @@ export const getUnreadCountsBatch = async (
 
     if (error) {
       console.error('❌ Error fetching unread counts batch:', error);
-      return {
-        success: false,
-        error: error.message,
-      };
+      return { success: false, error: error.message };
     }
 
-    // Count unread messages per user
     const countMap = new Map<string, number>();
     otherUserIds.forEach((userId) => {
       countMap.set(userId, 0);
@@ -642,16 +589,10 @@ export const getUnreadCountsBatch = async (
       });
     }
 
-    return {
-      success: true,
-      data: countMap,
-    };
+    return { success: true, data: countMap };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('❌ Exception fetching unread counts batch:', errorMessage);
-    return {
-      success: false,
-      error: errorMessage,
-    };
+    return { success: false, error: errorMessage };
   }
 };
